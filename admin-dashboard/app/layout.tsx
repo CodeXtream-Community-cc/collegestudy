@@ -3,8 +3,8 @@ import "./globals.css";
 import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
-  title: "HBTU Admin Dashboard",
-  description: "Admin panel for HBTU College Study App",
+  title: "College Study Admin Dashboard",
+  description: "Admin panel for College Study App",
 };
 
 export default function RootLayout({
