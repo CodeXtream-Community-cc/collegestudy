@@ -27,6 +27,18 @@ const MATERIAL_CATEGORIES = [
 
 type MaterialCategory = (typeof MATERIAL_CATEGORIES)[number]["value"];
 
+type NoteFormData = {
+  title: string;
+  description: string;
+  subject_id: string;
+  branch_ids: string[];
+  semester: string;
+  tags: string;
+  google_drive_link: string;
+  file_type: string;
+  material_category: MaterialCategory;
+};
+
 interface Note {
   id: string;
   title: string;
@@ -38,9 +50,6 @@ interface Note {
   download_count: number;
   tags?: string[];
   material_category?: MaterialCategory | null;
-  is_pyq: boolean;
-  academic_year?: string;
-  exam_type?: string;
   created_at: string;
   subjects?: {
     id: string;
@@ -83,21 +92,20 @@ export default function NotesPage() {
   const [saving, setSaving] = useState(false);
   const [editingNote, setEditingNote] = useState<Note | null>(null);
 
-  // Form state
-  const [formData, setFormData] = useState({
+  const defaultFormData: NoteFormData = {
     title: "",
     description: "",
     subject_id: "",
-    branch_ids: [] as string[], // Changed to array for multi-branch
+    branch_ids: [],
     semester: "",
     tags: "",
     google_drive_link: "",
     file_type: "PDF",
-    is_pyq: false,
-    material_category: "",
-    academic_year: "",
-    exam_type: "",
-  });
+    material_category: MATERIAL_CATEGORIES[0].value,
+  };
+
+  // Form state
+  const [formData, setFormData] = useState<NoteFormData>(defaultFormData);
 
   useEffect(() => {
     loadData();
@@ -261,29 +269,21 @@ export default function NotesPage() {
       return;
     }
 
+    if (!formData.material_category) {
+      alert("Please select a material type");
+      return;
+    }
+
     try {
       const noteData = {
         title: formData.title,
-
         description: formData.description,
-
         subject_id: formData.subject_id,
-
         file_url: formData.google_drive_link,
-
         file_type: formData.file_type,
-
         is_verified: true,
-
         tags: formData.tags ? formData.tags.split(",").map((t) => t.trim()) : [],
-
-        is_pyq: formData.is_pyq,
-
-        material_category: formData.is_pyq ? null : (formData.material_category as MaterialCategory) || null,
-
-        academic_year: formData.is_pyq ? formData.academic_year : null,
-
-        exam_type: formData.is_pyq ? formData.exam_type : null,
+        material_category: formData.material_category,
       };
 
       let noteId: string;
@@ -399,30 +399,14 @@ export default function NotesPage() {
       tags: note.tags?.join(", ") || "",
       google_drive_link: note.file_url,
       file_type: note.file_type || "PDF",
-      is_pyq: note.is_pyq || false,
-      material_category: (note.material_category as MaterialCategory | null) || "",
-      academic_year: note.academic_year || "",
-      exam_type: note.exam_type || "",
+      material_category: (note.material_category as MaterialCategory | null) ?? MATERIAL_CATEGORIES[0].value,
     });
     setShowModal(true);
   }
 
   function resetForm() {
     setEditingNote(null);
-    setFormData({
-      title: "",
-      description: "",
-      subject_id: "",
-      branch_ids: [],
-      semester: "",
-      tags: "",
-      google_drive_link: "",
-      file_type: "PDF",
-      is_pyq: false,
-      material_category: "",
-      academic_year: "",
-      exam_type: "",
-    });
+    setFormData(defaultFormData);
   }
 
   function extractGoogleDriveId(url: string): string | null {
@@ -594,14 +578,10 @@ export default function NotesPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                          note.is_pyq ? "bg-purple-100 text-purple-700" : "bg-green-100 text-green-700"
-                        }`}
-                      >
-                        {note.is_pyq
-                          ? "PYQ"
-                          : MATERIAL_CATEGORIES.find((cat) => cat.value === note.material_category)?.label || "Study Material"}
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                        {note.material_category
+                          ? MATERIAL_CATEGORIES.find((cat) => cat.value === note.material_category)?.label || "Study Material"
+                          : "Study Material"}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -832,95 +812,20 @@ export default function NotesPage() {
                 </select>
               </div>
 
-              {/* Note Category Section */}
               <div className="border-t border-gray-200 pt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-3">Note Category *</label>
-                <div className="flex items-center space-x-6 mb-4">
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="note_category"
-                      checked={!formData.is_pyq}
-                      onChange={() =>
-                    setFormData({
-                      ...formData,
-                      is_pyq: false,
-                      academic_year: "",
-                      exam_type: "",
-                      material_category: formData.material_category || "",
-                    })
-                  }
-                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
-                    />
-                    <span className="text-sm font-medium text-gray-700">📚 Study Materials</span>
-                  </label>
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="note_category"
-                      checked={formData.is_pyq}
-                      onChange={() =>
-                    setFormData({
-                      ...formData,
-                      is_pyq: true,
-                      material_category: "",
-                    })
-                  }
-                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
-                    />
-                    <span className="text-sm font-medium text-gray-700">📝 Previous Year Questions</span>
-                  </label>
-                </div>
-
-                {/* Material Type (if not PYQ) */}
-                {!formData.is_pyq && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Material Type *</label>
-                    <select
-                      required={!formData.is_pyq}
-                      value={formData.material_category}
-                      onChange={(e) => setFormData({ ...formData, material_category: e.target.value as MaterialCategory })}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                      <option value="">Select Material Type</option>
-                      {MATERIAL_CATEGORIES.map((category) => (
-                        <option key={category.value} value={category.value}>
-                          {category.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {/* PYQ Fields (if PYQ) */}
-                {formData.is_pyq && (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
-                      <input
-                        type="text"
-                        value={formData.academic_year}
-                        onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                        placeholder="e.g., 2023-24"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Exam Type</label>
-                      <select
-                        value={formData.exam_type}
-                        onChange={(e) => setFormData({ ...formData, exam_type: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                      >
-                        <option value="">Select Type</option>
-                        <option value="Mid Sem 1">Mid Sem 1</option>
-                        <option value="Mid Sem 2">Mid Sem 2</option>
-                        <option value="End Sem">End Sem</option>
-                        <option value="Practical">Practical</option>
-                      </select>
-                    </div>
-                  </div>
-                )}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Material Type *</label>
+                <select
+                  required
+                  value={formData.material_category}
+                  onChange={(e) => setFormData({ ...formData, material_category: e.target.value as MaterialCategory })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  {MATERIAL_CATEGORIES.map((category) => (
+                    <option key={category.value} value={category.value}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
