@@ -17,6 +17,16 @@ import {
   Link as LinkIcon,
 } from "lucide-react";
 
+const MATERIAL_CATEGORIES = [
+  { value: "notes", label: "Notes" },
+  { value: "books", label: "Books" },
+  { value: "practicals", label: "Practical Files" },
+  { value: "assignments", label: "Assignments" },
+  { value: "other", label: "Other Material" },
+] as const;
+
+type MaterialCategory = (typeof MATERIAL_CATEGORIES)[number]["value"];
+
 interface Note {
   id: string;
   title: string;
@@ -27,7 +37,7 @@ interface Note {
   is_verified: boolean;
   download_count: number;
   tags?: string[];
-  module_number?: number;
+  material_category?: MaterialCategory | null;
   is_pyq: boolean;
   academic_year?: string;
   exam_type?: string;
@@ -84,7 +94,7 @@ export default function NotesPage() {
     google_drive_link: "",
     file_type: "PDF",
     is_pyq: false,
-    module_number: "",
+    material_category: "",
     academic_year: "",
     exam_type: "",
   });
@@ -269,7 +279,7 @@ export default function NotesPage() {
 
         is_pyq: formData.is_pyq,
 
-        module_number: formData.is_pyq ? null : formData.module_number ? parseInt(formData.module_number) : null,
+        material_category: formData.is_pyq ? null : (formData.material_category as MaterialCategory) || null,
 
         academic_year: formData.is_pyq ? formData.academic_year : null,
 
@@ -390,7 +400,7 @@ export default function NotesPage() {
       google_drive_link: note.file_url,
       file_type: note.file_type || "PDF",
       is_pyq: note.is_pyq || false,
-      module_number: note.module_number?.toString() || "",
+      material_category: (note.material_category as MaterialCategory | null) || "",
       academic_year: note.academic_year || "",
       exam_type: note.exam_type || "",
     });
@@ -409,7 +419,7 @@ export default function NotesPage() {
       google_drive_link: "",
       file_type: "PDF",
       is_pyq: false,
-      module_number: "",
+      material_category: "",
       academic_year: "",
       exam_type: "",
     });
@@ -589,7 +599,9 @@ export default function NotesPage() {
                           note.is_pyq ? "bg-purple-100 text-purple-700" : "bg-green-100 text-green-700"
                         }`}
                       >
-                        {note.is_pyq ? "PYQ" : `Module ${note.module_number || "?"}`}
+                        {note.is_pyq
+                          ? "PYQ"
+                          : MATERIAL_CATEGORIES.find((cat) => cat.value === note.material_category)?.label || "Study Material"}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -829,39 +841,53 @@ export default function NotesPage() {
                       type="radio"
                       name="note_category"
                       checked={!formData.is_pyq}
-                      onChange={() => setFormData({ ...formData, is_pyq: false, academic_year: "", exam_type: "" })}
+                      onChange={() =>
+                    setFormData({
+                      ...formData,
+                      is_pyq: false,
+                      academic_year: "",
+                      exam_type: "",
+                      material_category: formData.material_category || "",
+                    })
+                  }
                       className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
                     />
-                    <span className="text-sm font-medium text-gray-700">📚 Module Notes</span>
+                    <span className="text-sm font-medium text-gray-700">📚 Study Materials</span>
                   </label>
                   <label className="flex items-center space-x-2 cursor-pointer">
                     <input
                       type="radio"
                       name="note_category"
                       checked={formData.is_pyq}
-                      onChange={() => setFormData({ ...formData, is_pyq: true, module_number: "" })}
+                      onChange={() =>
+                    setFormData({
+                      ...formData,
+                      is_pyq: true,
+                      material_category: "",
+                    })
+                  }
                       className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
                     />
                     <span className="text-sm font-medium text-gray-700">📝 Previous Year Questions</span>
                   </label>
                 </div>
 
-                {/* Module Number (if not PYQ) */}
+                {/* Material Type (if not PYQ) */}
                 {!formData.is_pyq && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Module Number *</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Material Type *</label>
                     <select
                       required={!formData.is_pyq}
-                      value={formData.module_number}
-                      onChange={(e) => setFormData({ ...formData, module_number: e.target.value })}
+                      value={formData.material_category}
+                      onChange={(e) => setFormData({ ...formData, material_category: e.target.value as MaterialCategory })}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                     >
-                      <option value="">Select Module</option>
-                      <option value="1">Module 1</option>
-                      <option value="2">Module 2</option>
-                      <option value="3">Module 3</option>
-                      <option value="4">Module 4</option>
-                      <option value="5">Module 5</option>
+                      <option value="">Select Material Type</option>
+                      {MATERIAL_CATEGORIES.map((category) => (
+                        <option key={category.value} value={category.value}>
+                          {category.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 )}
