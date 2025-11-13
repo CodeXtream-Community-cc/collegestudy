@@ -28,6 +28,7 @@ const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
   { name: "Notes", href: "/dashboard/notes", icon: FileText },
+  { name: "PYQs", href: "/dashboard/pyqs", icon: FileText },
   { name: "Subjects", href: "/dashboard/subjects", icon: BookOpen },
   { name: "Timetable", href: "/dashboard/timetable", icon: Clock },
   { name: "Events", href: "/dashboard/events", icon: Calendar },
