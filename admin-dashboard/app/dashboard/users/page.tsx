@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { supabase } from "@/lib/supabase";
 import { Search, Filter, UserCheck, UserX, Shield, Download, Crown, AlertTriangle, Trash2 } from "lucide-react";
+import { utils, writeFile } from "xlsx";
 
 interface User {
   id: string;
@@ -227,6 +228,41 @@ export default function UsersPage() {
     }).length,
   };
 
+  function handleExportUsers() {
+    if (users.length === 0) {
+      alert("There are no users to export right now.");
+      return;
+    }
+
+    try {
+      const exportData = users.map((user) => ({
+        ID: user.id,
+        Name: user.name || "",
+        Email: user.email,
+        Role: user.role,
+        "Can Manage Users": currentUserRole.canManageUsers ? (user.role !== "student" ? "Yes" : "No") : "Hidden",
+        Branch: user.branch_name || "",
+        "Branch ID": user.branch_id,
+        Year: user.year ?? "",
+        Semester: user.semester ?? "",
+        "Roll Number": user.roll_number || "",
+        "Is Admin": user.is_admin ? "Yes" : "No",
+        "Last Login": user.last_login ? new Date(user.last_login).toLocaleString() : "Never",
+        "Created At": new Date(user.created_at).toLocaleString(),
+      }));
+
+      const worksheet = utils.json_to_sheet(exportData);
+      const workbook = utils.book_new();
+      utils.book_append_sheet(workbook, worksheet, "Users");
+
+      const timestamp = new Date().toISOString().split("T")[0];
+      writeFile(workbook, `users-export-${timestamp}.xlsx`);
+    } catch (error) {
+      console.error("Error exporting users:", error);
+      alert("Failed to export users. Please try again.");
+    }
+  }
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -246,7 +282,10 @@ export default function UsersPage() {
               </div>
             )}
           </div>
-          <button className="flex items-center space-x-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg shadow-blue-500/30">
+          <button
+            onClick={handleExportUsers}
+            className="flex items-center space-x-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg shadow-blue-500/30"
+          >
             <Download className="w-5 h-5" />
             <span>Export Users</span>
           </button>

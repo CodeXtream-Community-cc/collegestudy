@@ -300,6 +300,16 @@ export default function DashboardPage() {
               <div className="text-sm text-gray-500">View and upload notes</div>
             </Link>
             <Link
+              href="/dashboard/syllabus"
+              className="group p-6 border-2 border-dashed border-gray-200 rounded-xl hover:border-indigo-400 hover:bg-indigo-50/50 transition-all duration-200 text-left"
+            >
+              <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform duration-200 shadow-lg shadow-indigo-500/30">
+                <span className="text-2xl">📘</span>
+              </div>
+              <div className="font-semibold text-gray-900 mb-1">Manage Syllabus</div>
+              <div className="text-sm text-gray-500">Upload and verify syllabi</div>
+            </Link>
+            <Link
               href="/dashboard/events"
               className="group p-6 border-2 border-dashed border-gray-200 rounded-xl hover:border-purple-400 hover:bg-purple-50/50 transition-all duration-200 text-left"
             >
