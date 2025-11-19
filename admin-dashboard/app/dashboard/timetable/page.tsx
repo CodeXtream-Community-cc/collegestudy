@@ -32,7 +32,8 @@ interface Subject {
   name: string;
   code: string;
   semester: number;
-  branch_id: string;
+  subject_branches?: { branch_id?: string | null }[];
+  branch_ids?: string[];
 }
 
 interface TimetableEntry {
@@ -139,18 +140,54 @@ export default function TimetablePage() {
       const { data: branchesData } = await supabase.from("branches").select("*").order("name");
       setBranches(branchesData || []);
 
-      // Fetch subjects using direct branch_id and semester columns
-      let subjectsQuery = supabase.from("subjects").select("*").eq("is_active", true);
+      // Fetch subjects through subject_branches junction to respect many-to-many mapping
+      let subjectsQuery;
 
       if (selectedBranch) {
-        subjectsQuery = subjectsQuery.eq("branch_id", selectedBranch);
+        subjectsQuery = supabase
+          .from("subjects")
+          .select(
+            `
+            *,
+            subject_branches:subject_branches!inner (
+              branch_id
+            )
+          `,
+          )
+          .eq("is_active", true)
+          .eq("subject_branches.branch_id", selectedBranch);
+      } else {
+        subjectsQuery = supabase
+          .from("subjects")
+          .select(
+            `
+            *,
+            subject_branches (
+              branch_id
+            )
+          `,
+          )
+          .eq("is_active", true);
       }
+
       if (selectedSemester) {
         subjectsQuery = subjectsQuery.eq("semester", parseInt(selectedSemester));
       }
 
       const { data: subjectsData } = await subjectsQuery.order("semester").order("name");
-      setSubjects(subjectsData || []);
+
+      const processedSubjects = (subjectsData || []).map((subject: Subject) => {
+        const branchIds = (subject.subject_branches || [])
+          .map((sb) => sb?.branch_id)
+          .filter((id): id is string => Boolean(id));
+
+        return {
+          ...subject,
+          branch_ids: branchIds,
+        };
+      });
+
+      setSubjects(processedSubjects);
 
       if (activeTab === "timetable") {
         // Fetch timetable entries
@@ -290,6 +327,108 @@ export default function TimetablePage() {
     }
   };
 
+  const getDeleteScopeLabel = (entity: "timetable entries" | "exam schedules") => {
+    const scopeParts: string[] = [];
+    if (selectedBranch) {
+      const branch = branches.find((item) => item.id === selectedBranch);
+      scopeParts.push(`branch ${branch ? `${branch.name} (${branch.code})` : "selection"}`);
+    }
+    if (selectedSemester) {
+      scopeParts.push(`semester ${selectedSemester}`);
+    }
+    if (scopeParts.length === 0) {
+      return `all ${entity}`;
+    }
+    if (scopeParts.length === 1) {
+      return `${entity} for ${scopeParts[0]}`;
+    }
+    return `${entity} for ${scopeParts.join(" and ")}`;
+  };
+
+  const handleDeleteAllTimetable = async () => {
+    const semesterNumber = selectedSemester ? parseInt(selectedSemester, 10) : null;
+    const hasMatchingEntries = timetableEntries.some((entry) => {
+      if (selectedBranch && entry.branch_id !== selectedBranch) {
+        return false;
+      }
+      if (semesterNumber !== null && entry.semester !== semesterNumber) {
+        return false;
+      }
+      return true;
+    });
+
+    if (!hasMatchingEntries) {
+      alert("No timetable entries found for the current filters.");
+      return;
+    }
+
+    if (
+      !confirm(
+        `Are you sure you want to delete ${getDeleteScopeLabel("timetable entries")}? This action cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    try {
+      let deleteQuery = supabase.from("timetable").delete();
+      if (selectedBranch) {
+        deleteQuery = deleteQuery.eq("branch_id", selectedBranch);
+      }
+      if (semesterNumber !== null) {
+        deleteQuery = deleteQuery.eq("semester", semesterNumber);
+      }
+      const { error } = await deleteQuery;
+      if (error) throw error;
+      fetchData();
+    } catch (error) {
+      console.error("Error deleting all timetable entries:", error);
+      alert("Failed to delete timetable entries");
+    }
+  };
+
+  const handleDeleteAllExams = async () => {
+    const semesterNumber = selectedSemester ? parseInt(selectedSemester, 10) : null;
+    const hasMatchingEntries = examSchedules.some((exam) => {
+      if (selectedBranch && exam.branch_id !== selectedBranch) {
+        return false;
+      }
+      if (semesterNumber !== null && exam.semester !== semesterNumber) {
+        return false;
+      }
+      return true;
+    });
+
+    if (!hasMatchingEntries) {
+      alert("No exam schedules found for the current filters.");
+      return;
+    }
+
+    if (
+      !confirm(
+        `Are you sure you want to delete ${getDeleteScopeLabel("exam schedules")}? This action cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    try {
+      let deleteQuery = supabase.from("exam_schedule").delete();
+      if (selectedBranch) {
+        deleteQuery = deleteQuery.eq("branch_id", selectedBranch);
+      }
+      if (semesterNumber !== null) {
+        deleteQuery = deleteQuery.eq("semester", semesterNumber);
+      }
+      const { error } = await deleteQuery;
+      if (error) throw error;
+      fetchData();
+    } catch (error) {
+      console.error("Error deleting exam schedules:", error);
+      alert("Failed to delete exam schedules");
+    }
+  };
+
   const resetTimetableForm = () => {
     setTimetableForm({
       branch_id: "",
@@ -376,6 +515,11 @@ export default function TimetablePage() {
     return true;
   });
 
+  const hasActiveTabEntries =
+    activeTab === "timetable"
+      ? filteredTimetableEntries.length > 0
+      : filteredExamSchedules.length > 0;
+
   return (
     <DashboardLayout>
       <div className="p-8">
@@ -385,21 +529,32 @@ export default function TimetablePage() {
             <h1 className="text-3xl font-bold text-gray-900">Timetable & Exams</h1>
             <p className="text-gray-600 mt-1">Manage class schedules and exam timetables</p>
           </div>
-          <button
-            onClick={() => {
-              setShowAddModal(true);
-              setEditingItem(null);
-              if (activeTab === "timetable") {
-                resetTimetableForm();
-              } else {
-                resetExamForm();
-              }
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <Plus size={20} />
-            Add {activeTab === "timetable" ? "Timetable Entry" : "Exam Schedule"}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={activeTab === "timetable" ? handleDeleteAllTimetable : handleDeleteAllExams}
+              disabled={!hasActiveTabEntries}
+              className="flex items-center gap-2 px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Trash2 size={20} />
+              Delete All {activeTab === "timetable" ? "Timetable Entries" : "Exam Schedules"}
+            </button>
+            <button
+              onClick={() => {
+                setShowAddModal(true);
+                setEditingItem(null);
+                if (activeTab === "timetable") {
+                  resetTimetableForm();
+                } else {
+                  resetExamForm();
+                }
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <Plus size={20} />
+              Add {activeTab === "timetable" ? "Timetable Entry" : "Exam Schedule"}
+            </button>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -777,7 +932,9 @@ function TimetableForm({
   onSubmit: () => void;
   onCancel: () => void;
 }) {
-  const filteredSubjects = subjects.filter((s) => s.branch_id === form.branch_id && s.semester === form.semester);
+  const filteredSubjects = subjects.filter(
+    (s) => s.branch_ids?.includes(form.branch_id) && s.semester === form.semester,
+  );
 
   return (
     <div className="space-y-4">
@@ -952,7 +1109,9 @@ function ExamForm({
   onSubmit: () => void;
   onCancel: () => void;
 }) {
-  const filteredSubjects = subjects.filter((s) => s.branch_id === form.branch_id && s.semester === form.semester);
+  const filteredSubjects = subjects.filter(
+    (s) => s.branch_ids?.includes(form.branch_id) && s.semester === form.semester,
+  );
 
   return (
     <div className="space-y-4">
