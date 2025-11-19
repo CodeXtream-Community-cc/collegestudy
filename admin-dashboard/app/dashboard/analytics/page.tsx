@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { supabase } from "@/lib/supabase";
 import {
@@ -35,9 +35,14 @@ import {
 interface OverallStats {
   totalUsers: number;
   totalNotes: number;
+  totalPyqs: number;
+  totalSyllabusDocs: number;
   totalEvents: number;
   totalOpportunities: number;
   totalDownloads: number;
+  totalNoteDownloads: number;
+  totalPyqDownloads: number;
+  totalSyllabusDownloads: number;
   totalBookmarks: number;
   totalBranches: number;
   totalSubjects: number;
@@ -84,8 +89,12 @@ interface UserActivityData {
 interface DailyActivity {
   date: string;
   downloads: number;
+  unique_downloaders: number;
   new_users: number;
   notes_uploaded: number;
+  pyqs_uploaded: number;
+  syllabus_uploaded: number;
+  downloads_per_user: number;
 }
 
 interface SubjectAnalytics {
@@ -99,6 +108,163 @@ interface SubjectAnalytics {
   avg_downloads_per_note: number;
 }
 
+interface ResourceInsight {
+  total: number;
+  verified: number;
+  totalDownloads: number;
+  avgDownloads: number;
+}
+
+interface ContentAnalytics {
+  notes: ResourceInsight;
+  pyqs: ResourceInsight;
+  syllabus: ResourceInsight;
+}
+
+interface ResourceTopItem {
+  id: string;
+  title: string;
+  download_count: number;
+  semester?: number | null;
+  branches?: string[];
+  is_verified?: boolean;
+}
+
+interface RecentUpload {
+  id: string;
+  title: string;
+  type: "Notes" | "PYQ" | "Syllabus";
+  created_at: string;
+  is_verified: boolean;
+  download_count: number;
+  semester?: number | null;
+  branches?: string[];
+}
+
+interface ContentVelocity {
+  notesCreated: number;
+  pyqsCreated: number;
+  syllabusCreated: number;
+}
+
+type Tone =
+  | "blue"
+  | "green"
+  | "purple"
+  | "amber"
+  | "indigo"
+  | "sky"
+  | "orange"
+  | "lime"
+  | "emerald"
+  | "violet"
+  | "rose";
+
+const tonePalette: Record<Tone, { background: string; label: string; value: string; detail: string }> = {
+  blue: {
+    background: "bg-blue-50",
+    label: "text-blue-600",
+    value: "text-blue-700",
+    detail: "text-blue-500",
+  },
+  green: {
+    background: "bg-green-50",
+    label: "text-green-600",
+    value: "text-green-700",
+    detail: "text-green-500",
+  },
+  purple: {
+    background: "bg-purple-50",
+    label: "text-purple-600",
+    value: "text-purple-700",
+    detail: "text-purple-500",
+  },
+  amber: {
+    background: "bg-amber-50",
+    label: "text-amber-600",
+    value: "text-amber-700",
+    detail: "text-amber-500",
+  },
+  indigo: {
+    background: "bg-indigo-50",
+    label: "text-indigo-600",
+    value: "text-indigo-700",
+    detail: "text-indigo-500",
+  },
+  sky: {
+    background: "bg-sky-50",
+    label: "text-sky-600",
+    value: "text-sky-700",
+    detail: "text-sky-500",
+  },
+  orange: {
+    background: "bg-orange-50",
+    label: "text-orange-600",
+    value: "text-orange-700",
+    detail: "text-orange-500",
+  },
+  lime: {
+    background: "bg-lime-50",
+    label: "text-lime-600",
+    value: "text-lime-700",
+    detail: "text-lime-500",
+  },
+  emerald: {
+    background: "bg-emerald-50",
+    label: "text-emerald-600",
+    value: "text-emerald-700",
+    detail: "text-emerald-500",
+  },
+  violet: {
+    background: "bg-violet-50",
+    label: "text-violet-600",
+    value: "text-violet-700",
+    detail: "text-violet-500",
+  },
+  rose: {
+    background: "bg-rose-50",
+    label: "text-rose-600",
+    value: "text-rose-700",
+    detail: "text-rose-500",
+  },
+};
+
+interface HighlightCardProps {
+  tone: Tone;
+  label: string;
+  value: ReactNode;
+  detail?: ReactNode;
+  children?: ReactNode;
+}
+
+function HighlightCard({ tone, label, value, detail, children }: HighlightCardProps) {
+  const styles = tonePalette[tone] ?? tonePalette.blue;
+  return (
+    <div className={`p-4 rounded-lg ${styles.background}`}>
+      <div className={`text-xs uppercase tracking-wide ${styles.label}`}>{label}</div>
+      <div className={`mt-1 text-2xl font-bold ${styles.value}`}>{value}</div>
+      {detail && <div className={`mt-1 text-xs ${styles.detail}`}>{detail}</div>}
+      {children}
+    </div>
+  );
+}
+
+interface SummaryCardProps {
+  tone: Tone;
+  value: ReactNode;
+  label: ReactNode;
+}
+
+function SummaryCard({ tone, value, label }: SummaryCardProps) {
+  const styles = tonePalette[tone] ?? tonePalette.blue;
+  return (
+    <div className={`text-center p-3 rounded-lg ${styles.background}`}>
+      <div className={`text-xl font-bold ${styles.value}`}>{value}</div>
+      <div className="text-xs text-gray-600 mt-1">{label}</div>
+    </div>
+  );
+}
+
 export default function ComprehensiveAnalytics() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -109,9 +275,14 @@ export default function ComprehensiveAnalytics() {
   const [overallStats, setOverallStats] = useState<OverallStats>({
     totalUsers: 0,
     totalNotes: 0,
+    totalPyqs: 0,
+    totalSyllabusDocs: 0,
     totalEvents: 0,
     totalOpportunities: 0,
     totalDownloads: 0,
+    totalNoteDownloads: 0,
+    totalPyqDownloads: 0,
+    totalSyllabusDownloads: 0,
     totalBookmarks: 0,
     totalBranches: 0,
     totalSubjects: 0,
@@ -124,6 +295,28 @@ export default function ComprehensiveAnalytics() {
     downloads_today: 0,
     downloads_this_week: 0,
     downloads_this_month: 0,
+  });
+
+  const defaultResourceInsight: ResourceInsight = {
+    total: 0,
+    verified: 0,
+    totalDownloads: 0,
+    avgDownloads: 0,
+  };
+
+  const [contentAnalytics, setContentAnalytics] = useState<ContentAnalytics>({
+    notes: { ...defaultResourceInsight },
+    pyqs: { ...defaultResourceInsight },
+    syllabus: { ...defaultResourceInsight },
+  });
+
+  const [topPyqs, setTopPyqs] = useState<ResourceTopItem[]>([]);
+  const [topSyllabusDocs, setTopSyllabusDocs] = useState<ResourceTopItem[]>([]);
+  const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
+  const [contentVelocity, setContentVelocity] = useState<ContentVelocity>({
+    notesCreated: 0,
+    pyqsCreated: 0,
+    syllabusCreated: 0,
   });
 
   // Detailed Analytics
@@ -158,30 +351,106 @@ export default function ComprehensiveAnalytics() {
     }
   }
 
+  const calculateResourceInsight = (items: { download_count?: number | null; is_verified?: boolean | null }[]) => {
+    const total = items.length;
+    const verified = items.filter((item) => item.is_verified).length;
+    const totalDownloads = items.reduce((sum, item) => sum + (item.download_count || 0), 0);
+
+    return {
+      total,
+      verified,
+      totalDownloads,
+      avgDownloads: total > 0 ? Math.round(totalDownloads / total) : 0,
+    };
+  };
+
   async function loadOverallStats() {
     try {
-      const [usersRes, notesRes, eventsRes, opportunitiesRes, branchesRes, subjectsRes, bookmarksRes] =
-        await Promise.all([
-          supabase.from("users").select("id", { count: "exact", head: true }),
-          supabase.from("notes").select("id, download_count", { count: "exact" }),
-          supabase.from("events").select("id", { count: "exact", head: true }),
-          supabase.from("opportunities").select("id", { count: "exact", head: true }),
-          supabase.from("branches").select("id", { count: "exact", head: true }),
-          supabase.from("subjects").select("id", { count: "exact", head: true }),
-          supabase.from("opportunity_bookmarks").select("id", { count: "exact", head: true }),
-        ]);
+      const [
+        usersRes,
+        notesRes,
+        eventsRes,
+        opportunitiesRes,
+        branchesRes,
+        subjectsRes,
+        bookmarksRes,
+        syllabusRes,
+        pyqsRes,
+      ] = await Promise.all([
+        supabase.from("users").select("id", { count: "exact", head: true }),
+        supabase.from("notes").select("id, download_count, is_verified", { count: "exact" }),
+        supabase.from("events").select("id", { count: "exact", head: true }),
+        supabase.from("opportunities").select("id", { count: "exact", head: true }),
+        supabase.from("branches").select("id", { count: "exact", head: true }),
+        supabase.from("subjects").select("id", { count: "exact", head: true }),
+        supabase.from("opportunity_bookmarks").select("id", { count: "exact", head: true }),
+        supabase.from("syllabus_documents").select("id, download_count, is_verified", { count: "exact" }),
+        supabase.from("pyq_documents").select("id, download_count, is_verified", { count: "exact" }),
+      ]);
 
-      const totalDownloads = notesRes.data?.reduce((sum, note) => sum + (note.download_count || 0), 0) || 0;
+      const notesData = notesRes.data ?? [];
+      const syllabusData = syllabusRes.data ?? [];
+      const pyqsData = pyqsRes.data ?? [];
+
+      const noteInsight = calculateResourceInsight(notesData);
+      const syllabusInsight = calculateResourceInsight(syllabusData);
+      const pyqInsight = calculateResourceInsight(pyqsData);
+
+      const [noteDownloadEventsRes, pyqDownloadEventsRes, syllabusDownloadEventsRes] = await Promise.all([
+        supabase.from("note_downloads").select("id", { count: "exact", head: true }),
+        supabase.from("pyq_downloads").select("id", { count: "exact", head: true }),
+        supabase.from("syllabus_downloads").select("id", { count: "exact", head: true }),
+      ]);
+
+      const totalNoteDownloadEvents = Math.max(noteDownloadEventsRes.count ?? 0, noteInsight.totalDownloads);
+      const totalPyqDownloadEvents = Math.max(pyqDownloadEventsRes.count ?? 0, pyqInsight.totalDownloads);
+      const totalSyllabusDownloadEvents = Math.max(
+        syllabusDownloadEventsRes.count ?? 0,
+        syllabusInsight.totalDownloads,
+      );
+
+      const adjustedNoteInsight = {
+        ...noteInsight,
+        totalDownloads: totalNoteDownloadEvents,
+        avgDownloads: noteInsight.total > 0 ? Math.round(totalNoteDownloadEvents / noteInsight.total) : 0,
+      };
+
+      const adjustedPyqInsight = {
+        ...pyqInsight,
+        totalDownloads: totalPyqDownloadEvents,
+        avgDownloads: pyqInsight.total > 0 ? Math.round(totalPyqDownloadEvents / pyqInsight.total) : 0,
+      };
+
+      const adjustedSyllabusInsight = {
+        ...syllabusInsight,
+        totalDownloads: totalSyllabusDownloadEvents,
+        avgDownloads:
+          syllabusInsight.total > 0 ? Math.round(totalSyllabusDownloadEvents / syllabusInsight.total) : 0,
+      };
+
+      const totalDownloads =
+        totalNoteDownloadEvents + totalPyqDownloadEvents + totalSyllabusDownloadEvents;
 
       setOverallStats({
         totalUsers: usersRes.count || 0,
         totalNotes: notesRes.count || 0,
+        totalPyqs: pyqsRes.count || 0,
+        totalSyllabusDocs: syllabusRes.count || 0,
         totalEvents: eventsRes.count || 0,
         totalOpportunities: opportunitiesRes.count || 0,
         totalDownloads,
+        totalNoteDownloads: totalNoteDownloadEvents,
+        totalPyqDownloads: totalPyqDownloadEvents,
+        totalSyllabusDownloads: totalSyllabusDownloadEvents,
         totalBookmarks: bookmarksRes.count || 0,
         totalBranches: branchesRes.count || 0,
         totalSubjects: subjectsRes.count || 0,
+      });
+
+      setContentAnalytics({
+        notes: adjustedNoteInsight,
+        pyqs: adjustedPyqInsight,
+        syllabus: adjustedSyllabusInsight,
       });
     } catch (error) {
       console.error("Error loading overall stats:", error);
@@ -267,9 +536,14 @@ export default function ComprehensiveAnalytics() {
     try {
       const { data: branchesData } = await supabase.from("branches").select("id, name, code");
 
+      const relevantBranches =
+        selectedBranch === "all"
+          ? branchesData || []
+          : (branchesData || []).filter((branch) => branch.id === selectedBranch);
+
       const branchStatsPromises =
-        branchesData?.map(async (branch) => {
-          const [usersRes, notesRes, downloadsRes] = await Promise.all([
+        relevantBranches.map(async (branch) => {
+          const [usersRes, notesRes] = await Promise.all([
             supabase.from("users").select("id", { count: "exact", head: true }).eq("branch_id", branch.id),
             supabase
               .from("notes")
@@ -278,7 +552,6 @@ export default function ComprehensiveAnalytics() {
                 "subject_id",
                 (await supabase.from("subjects").select("id").eq("branch_id", branch.id)).data?.map((s) => s.id) || [],
               ),
-            supabase.from("note_downloads").select("id", { count: "exact", head: true }),
           ]);
 
           const totalDownloads = notesRes.data?.reduce((sum, note) => sum + (note.download_count || 0), 0) || 0;
@@ -302,7 +575,7 @@ export default function ComprehensiveAnalytics() {
 
   async function loadActiveUsers() {
     try {
-      const { data: usersData } = await supabase
+      let query = supabase
         .from("users")
         .select(
           `
@@ -319,6 +592,12 @@ export default function ComprehensiveAnalytics() {
         )
         .order("last_login", { ascending: false })
         .limit(20);
+
+      if (selectedBranch !== "all") {
+        query = query.eq("branch_id", selectedBranch);
+      }
+
+      const { data: usersData } = await query;
 
       if (usersData) {
         const usersWithActivity = await Promise.all(
@@ -389,8 +668,8 @@ export default function ComprehensiveAnalytics() {
           nextDate.setDate(nextDate.getDate() + 1);
           const nextDateStr = nextDate.toISOString().split("T")[0];
 
-          const [downloadsRes, usersRes, notesRes] = await Promise.all([
-            supabase.from("note_downloads").select("id", { count: "exact", head: true }).eq("download_date", date),
+          const [downloadsDataRes, usersRes, notesRes, pyqsRes, syllabusRes] = await Promise.all([
+            supabase.from("note_downloads").select("user_id").eq("download_date", date),
             supabase
               .from("users")
               .select("id", { count: "exact", head: true })
@@ -401,13 +680,37 @@ export default function ComprehensiveAnalytics() {
               .select("id", { count: "exact", head: true })
               .gte("created_at", date)
               .lt("created_at", nextDateStr),
+            supabase
+              .from("pyq_documents")
+              .select("id", { count: "exact", head: true })
+              .gte("created_at", date)
+              .lt("created_at", nextDateStr),
+            supabase
+              .from("syllabus_documents")
+              .select("id", { count: "exact", head: true })
+              .gte("created_at", date)
+              .lt("created_at", nextDateStr),
           ]);
+
+          const downloadsData = downloadsDataRes.data ?? [];
+          const downloads = downloadsData.length;
+          const uniqueDownloaders = new Set(
+            downloadsData
+              .map((record) => record.user_id)
+              .filter((id): id is string => typeof id === "string" && id.length > 0),
+          ).size;
+
+          const downloadsPerUser = uniqueDownloaders > 0 ? Number((downloads / uniqueDownloaders).toFixed(2)) : 0;
 
           return {
             date,
-            downloads: downloadsRes.count || 0,
+            downloads,
+            unique_downloaders: uniqueDownloaders,
             new_users: usersRes.count || 0,
             notes_uploaded: notesRes.count || 0,
+            pyqs_uploaded: pyqsRes.count || 0,
+            syllabus_uploaded: syllabusRes.count || 0,
+            downloads_per_user: downloadsPerUser,
           };
         }),
       );
@@ -488,12 +791,17 @@ export default function ComprehensiveAnalytics() {
         ["Metric", "Value"],
         ["Total Users", overallStats.totalUsers.toString()],
         ["Total Notes", overallStats.totalNotes.toString()],
+        ["Total PYQs", overallStats.totalPyqs.toString()],
+        ["Total Syllabus Docs", overallStats.totalSyllabusDocs.toString()],
         ["Total Events", overallStats.totalEvents.toString()],
-        ["Total Downloads", downloadAnalytics.total_downloads.toString()],
-        ["Unique Users", downloadAnalytics.unique_users.toString()],
-        ["Downloads Today", downloadAnalytics.downloads_today.toString()],
-        ["Downloads This Week", downloadAnalytics.downloads_this_week.toString()],
-        ["Downloads This Month", downloadAnalytics.downloads_this_month.toString()],
+        ["Total Downloads (All Resources)", overallStats.totalDownloads.toString()],
+        ["Notes Downloads", overallStats.totalNoteDownloads.toString()],
+        ["PYQ Downloads", overallStats.totalPyqDownloads.toString()],
+        ["Syllabus Downloads", overallStats.totalSyllabusDownloads.toString()],
+        ["Unique Note Downloaders", downloadAnalytics.unique_users.toString()],
+        ["Note Downloads Today", downloadAnalytics.downloads_today.toString()],
+        ["Note Downloads This Week", downloadAnalytics.downloads_this_week.toString()],
+        ["Note Downloads This Month", downloadAnalytics.downloads_this_month.toString()],
       ];
 
       const csvContent = csvData.map((row) => row.join(",")).join("\n");
@@ -533,14 +841,132 @@ export default function ComprehensiveAnalytics() {
     return num.toString();
   };
 
+  const totalContentItems =
+    overallStats.totalNotes + overallStats.totalPyqs + overallStats.totalSyllabusDocs;
+
+  const totalResourceDownloads =
+    overallStats.totalNoteDownloads + overallStats.totalPyqDownloads + overallStats.totalSyllabusDownloads;
+
+  const getDownloadShare = (value: number) => {
+    if (totalResourceDownloads === 0) return 0;
+    return Math.round((value / totalResourceDownloads) * 100);
+  };
+
+  const resourceBreakdown = [
+    {
+      key: "notes",
+      title: "Notes",
+      badgeClass: "bg-blue-100 text-blue-700",
+      accent: "text-blue-600",
+      data: contentAnalytics.notes,
+    },
+    {
+      key: "pyqs",
+      title: "PYQs",
+      badgeClass: "bg-purple-100 text-purple-700",
+      accent: "text-purple-600",
+      data: contentAnalytics.pyqs,
+    },
+    {
+      key: "syllabus",
+      title: "Syllabus",
+      badgeClass: "bg-amber-100 text-amber-700",
+      accent: "text-amber-600",
+      data: contentAnalytics.syllabus,
+    },
+  ];
+
+  function calculateGrowthRate(current: number, previous: number) {
+    if (previous === 0) return current > 0 ? 100 : 0;
+    return Math.round(((current - previous) / previous) * 100);
+  }
+
+  const downloadBreakdown = [
+    {
+      label: "Notes",
+      value: overallStats.totalNoteDownloads,
+      percent: getDownloadShare(overallStats.totalNoteDownloads),
+      barClass: "bg-blue-500",
+    },
+    {
+      label: "PYQs",
+      value: overallStats.totalPyqDownloads,
+      percent: getDownloadShare(overallStats.totalPyqDownloads),
+      barClass: "bg-purple-500",
+    },
+    {
+      label: "Syllabus",
+      value: overallStats.totalSyllabusDownloads,
+      percent: getDownloadShare(overallStats.totalSyllabusDownloads),
+      barClass: "bg-amber-500",
+    },
+  ];
+
+  const downloadsLast7Days = dailyActivity.slice(-7).reduce((sum, day) => sum + day.downloads, 0);
+  const downloadsPrev7Days = dailyActivity.slice(-14, -7).reduce((sum, day) => sum + day.downloads, 0);
+  const weeklyGrowth = calculateGrowthRate(downloadsLast7Days, downloadsPrev7Days);
+  const totalDownloadsInRange = dailyActivity.reduce((sum, day) => sum + day.downloads, 0);
+  const avgDownloadsPerActiveDay = dailyActivity.length > 0 ? Math.round(totalDownloadsInRange / dailyActivity.length) : 0;
+  const totalUniqueDownloadersInRange = dailyActivity.reduce((sum, day) => sum + day.unique_downloaders, 0);
+  const totalNotesUploadedInRange = dailyActivity.reduce((sum, day) => sum + day.notes_uploaded, 0);
+  const totalPyqsUploadedInRange = dailyActivity.reduce((sum, day) => sum + day.pyqs_uploaded, 0);
+  const totalSyllabusUploadedInRange = dailyActivity.reduce((sum, day) => sum + day.syllabus_uploaded, 0);
+  const totalResourceUploadsInRange =
+    totalNotesUploadedInRange + totalPyqsUploadedInRange + totalSyllabusUploadedInRange;
+  const totalNewUsersInRange = dailyActivity.reduce((sum, day) => sum + day.new_users, 0);
+  const avgDownloadsPerUserRange = totalUniqueDownloadersInRange > 0
+    ? Number((totalDownloadsInRange / totalUniqueDownloadersInRange).toFixed(2))
+    : 0;
+  const topDownloadDay = dailyActivity.reduce<DailyActivity | null>((best, current) => {
+    if (!best) return current;
+    return current.downloads > best.downloads ? current : best;
+  }, null);
+  const topDownloadDayLabel = topDownloadDay
+    ? new Date(topDownloadDay.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : "—";
+  const topDownloadDayValue = topDownloadDay?.downloads || 0;
+  const peakDownloadsPerUserDay = dailyActivity.reduce<DailyActivity | null>((best, current) => {
+    if (!best) return current;
+    return current.downloads_per_user > best.downloads_per_user ? current : best;
+  }, null);
+  const peakDownloadsPerUserLabel = peakDownloadsPerUserDay
+    ? new Date(peakDownloadsPerUserDay.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : "—";
+  const peakDownloadsPerUserValue = peakDownloadsPerUserDay?.downloads_per_user ?? 0;
+  const maxChartDownloads = Math.max(...dailyActivity.map((d) => d.downloads)) || 1;
+  const uniqueDownloaderShare = overallStats.totalUsers > 0
+    ? Number(((downloadAnalytics.unique_users / overallStats.totalUsers) * 100).toFixed(1))
+    : 0;
+  const avgResourceUploadsPerDay =
+    dailyActivity.length > 0 ? Number((totalResourceUploadsInRange / dailyActivity.length).toFixed(2)) : 0;
+  const notesUploadsPerDay =
+    dailyActivity.length > 0 ? Number((totalNotesUploadedInRange / dailyActivity.length).toFixed(2)) : 0;
+  const pyqsUploadsPerDay =
+    dailyActivity.length > 0 ? Number((totalPyqsUploadedInRange / dailyActivity.length).toFixed(2)) : 0;
+  const syllabusUploadsPerDay =
+    dailyActivity.length > 0 ? Number((totalSyllabusUploadedInRange / dailyActivity.length).toFixed(2)) : 0;
+  const resourceUploadMix = totalResourceUploadsInRange > 0
+    ? {
+        notes: Math.round((totalNotesUploadedInRange / totalResourceUploadsInRange) * 100),
+        pyqs: Math.round((totalPyqsUploadedInRange / totalResourceUploadsInRange) * 100),
+        syllabus: Math.round((totalSyllabusUploadedInRange / totalResourceUploadsInRange) * 100),
+      }
+    : { notes: 0, pyqs: 0, syllabus: 0 };
+  const peakDownloadsPerUserDisplay = peakDownloadsPerUserValue.toFixed(2);
+  const engagementRate = overallStats.totalUsers > 0 ? Math.round((downloadAnalytics.unique_users / overallStats.totalUsers) * 100) : 0;
+  const downloadReach = overallStats.totalNotes > 0 ? Math.round((downloadAnalytics.unique_notes / overallStats.totalNotes) * 100) : 0;
+  const branchDownloadLeader =
+    branchStats.length > 0
+      ? branchStats.reduce((best, branch) => (branch.download_count > best.download_count ? branch : best), branchStats[0])
+      : null;
+  const branchLeaderShare = branchDownloadLeader && overallStats.totalNoteDownloads > 0
+    ? Math.round((branchDownloadLeader.download_count / overallStats.totalNoteDownloads) * 100)
+    : 0;
+  const totalSubjectDownloads = subjectAnalytics.reduce((sum, subject) => sum + subject.total_downloads, 0);
+
   const formatDate = (dateString: string) => {
     if (dateString === "Never") return "Never";
     return new Date(dateString).toLocaleDateString();
-  };
-
-  const calculateGrowthRate = (current: number, previous: number) => {
-    if (previous === 0) return current > 0 ? 100 : 0;
-    return Math.round(((current - previous) / previous) * 100);
   };
 
   if (loading) {
@@ -635,8 +1061,10 @@ export default function ComprehensiveAnalytics() {
               </div>
             </div>
             <p className="text-green-100 text-sm mb-1">Total Downloads</p>
-            <p className="text-4xl font-bold">{formatNumber(downloadAnalytics.total_downloads)}</p>
-            <p className="text-green-100 text-sm mt-2">By {downloadAnalytics.unique_users} users</p>
+            <p className="text-4xl font-bold">{formatNumber(overallStats.totalDownloads)}</p>
+            <p className="text-green-100 text-sm mt-2 text-xs md:text-sm">
+              Notes {formatNumber(overallStats.totalNoteDownloads)} • PYQs {formatNumber(overallStats.totalPyqDownloads)} • Syllabus {formatNumber(overallStats.totalSyllabusDownloads)}
+            </p>
           </div>
 
           <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl p-6 text-white shadow-xl">
@@ -647,9 +1075,11 @@ export default function ComprehensiveAnalytics() {
                 <span className="text-sm">+8%</span>
               </div>
             </div>
-            <p className="text-purple-100 text-sm mb-1">Total Notes</p>
-            <p className="text-4xl font-bold">{formatNumber(overallStats.totalNotes)}</p>
-            <p className="text-purple-100 text-sm mt-2">{overallStats.totalSubjects} subjects covered</p>
+            <p className="text-purple-100 text-sm mb-1">Learning Assets</p>
+            <p className="text-4xl font-bold">{formatNumber(totalContentItems)}</p>
+            <p className="text-purple-100 text-sm mt-2">
+              Notes {overallStats.totalNotes} • PYQs {overallStats.totalPyqs} • Syllabus {overallStats.totalSyllabusDocs}
+            </p>
           </div>
 
           <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl p-6 text-white shadow-xl">
@@ -672,33 +1102,65 @@ export default function ComprehensiveAnalytics() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Download Activity */}
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-lg">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-              <Activity className="w-5 h-5 mr-2 text-blue-600" />
-              Download Activity
-            </h3>
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <span className="text-gray-600">Today</span>
-                <span className="font-bold text-2xl text-blue-600">{downloadAnalytics.downloads_today}</span>
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                  <Activity className="w-5 h-5 mr-2 text-blue-600" />
+                  Notes Download Activity
+                </h3>
+                <p className="text-xs text-gray-500">Derived from note_downloads events</p>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-gray-600">This Week</span>
-                <span className="font-bold text-xl text-green-600">{downloadAnalytics.downloads_this_week}</span>
+              <div className={`text-xs px-3 py-1 rounded-full font-medium ${weeklyGrowth >= 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                {weeklyGrowth >= 0 ? "+" : ""}{weeklyGrowth}% vs last 7 days
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-gray-600">This Month</span>
-                <span className="font-bold text-xl text-purple-600">{downloadAnalytics.downloads_this_month}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 bg-blue-50 rounded-xl">
+                <div className="text-sm text-blue-600">Today</div>
+                <div className="text-3xl font-bold text-blue-700">{downloadAnalytics.downloads_today}</div>
+                <div className="text-xs text-blue-500 mt-1">Peak {topDownloadDayLabel}</div>
               </div>
-              <hr className="my-4" />
-              <div className="grid grid-cols-2 gap-4 text-center">
-                <div className="p-3 bg-blue-50 rounded-lg">
-                  <div className="text-xl font-bold text-blue-600">{downloadAnalytics.unique_users}</div>
-                  <div className="text-xs text-blue-600">Active Users</div>
+              <div className="p-4 bg-green-50 rounded-xl">
+                <div className="text-sm text-green-600">This Week</div>
+                <div className="text-3xl font-bold text-green-700">{downloadAnalytics.downloads_this_week}</div>
+                <div className="text-xs text-green-500 mt-1">Average {avgDownloadsPerActiveDay} / day</div>
+              </div>
+              <div className="col-span-2 p-4 bg-purple-50 rounded-xl">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="text-sm text-purple-600">This Month</div>
+                    <div className="text-2xl font-bold text-purple-700">{downloadAnalytics.downloads_this_month}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-gray-500">Top download day</div>
+                    <div className="text-sm font-semibold text-gray-700">{topDownloadDayLabel} • {topDownloadDayValue}</div>
+                  </div>
                 </div>
-                <div className="p-3 bg-green-50 rounded-lg">
-                  <div className="text-xl font-bold text-green-600">{downloadAnalytics.unique_notes}</div>
-                  <div className="text-xs text-green-600">Downloaded Notes</div>
+                <div className="mt-3">
+                  <div className="h-2 bg-purple-200 rounded-full">
+                    <div className="h-2 bg-purple-500 rounded-full" style={{ width: `${Math.min(100, Math.round((downloadAnalytics.downloads_this_week / Math.max(downloadAnalytics.downloads_this_month || 1, 1)) * 100))}%` }} />
+                  </div>
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>Weekly progress</span>
+                    <span>{downloadAnalytics.downloads_this_week}/{downloadAnalytics.downloads_this_month}</span>
+                  </div>
                 </div>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              <div className="flex items-center justify-between p-3 border border-blue-100 rounded-lg">
+                <div>
+                  <div className="text-xs text-blue-500 uppercase tracking-wide">Unique Downloaders</div>
+                  <div className="text-lg font-semibold text-gray-900">{downloadAnalytics.unique_users}</div>
+                </div>
+                <div className="text-sm text-blue-600 font-medium">{engagementRate}% of users</div>
+              </div>
+              <div className="flex items-center justify-between p-3 border border-green-100 rounded-lg">
+                <div>
+                  <div className="text-xs text-green-500 uppercase tracking-wide">Notes Downloaded</div>
+                  <div className="text-lg font-semibold text-gray-900">{downloadAnalytics.unique_notes}</div>
+                </div>
+                <div className="text-sm text-green-600 font-medium">{downloadReach}% of library</div>
               </div>
             </div>
           </div>
@@ -707,33 +1169,62 @@ export default function ComprehensiveAnalytics() {
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-lg">
             <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
               <Target className="w-5 h-5 mr-2 text-green-600" />
-              Engagement Metrics
+              Notes Engagement Metrics
             </h3>
-            <div className="space-y-4">
-              <div className="text-center p-4 bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg">
-                <div className="text-3xl font-bold text-blue-600">
-                  {downloadAnalytics.unique_users > 0
-                    ? Math.round(downloadAnalytics.total_downloads / downloadAnalytics.unique_users)
-                    : 0}
+            <div className="grid grid-cols-1 gap-4">
+              <div className="p-4 bg-gradient-to-r from-blue-50 to-blue-100 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-blue-600 uppercase tracking-wide">Avg Downloads per User</div>
+                    <div className="text-3xl font-bold text-blue-700">
+                      {downloadAnalytics.unique_users > 0
+                        ? Math.round(downloadAnalytics.total_downloads / downloadAnalytics.unique_users)
+                        : 0}
+                    </div>
+                  </div>
+                  <div className="text-right text-sm text-blue-500">
+                    {formatNumber(downloadAnalytics.total_downloads)} total downloads
+                  </div>
                 </div>
-                <div className="text-sm text-blue-600">Avg Downloads per User</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-lg">
-                <div className="text-3xl font-bold text-green-600">
-                  {downloadAnalytics.unique_notes > 0
-                    ? Math.round(downloadAnalytics.total_downloads / downloadAnalytics.unique_notes)
-                    : 0}
+              <div className="p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-green-600 uppercase tracking-wide">Avg Downloads per Note</div>
+                    <div className="text-3xl font-bold text-green-700">
+                      {downloadAnalytics.unique_notes > 0
+                        ? Math.round(downloadAnalytics.total_downloads / downloadAnalytics.unique_notes)
+                        : 0}
+                    </div>
+                  </div>
+                  <div className="text-right text-sm text-green-500">
+                    {downloadAnalytics.unique_notes} notes reached
+                  </div>
                 </div>
-                <div className="text-sm text-green-600">Avg Downloads per Note</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-r from-purple-50 to-purple-100 rounded-lg">
-                <div className="text-3xl font-bold text-purple-600">
-                  {overallStats.totalNotes > 0
-                    ? Math.round((downloadAnalytics.unique_notes / overallStats.totalNotes) * 100)
-                    : 0}
-                  %
+              <div className="p-4 bg-gradient-to-r from-purple-50 to-purple-100 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-purple-600 uppercase tracking-wide">Notes Downloaded</div>
+                    <div className="text-3xl font-bold text-purple-700">{downloadReach}%</div>
+                  </div>
+                  <div className="text-right text-sm text-purple-500">
+                    {downloadReach}% of {overallStats.totalNotes} notes
+                  </div>
                 </div>
-                <div className="text-sm text-purple-600">Notes Downloaded</div>
+              </div>
+              <div className="p-4 bg-gradient-to-r from-amber-50 to-amber-100 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-amber-600 uppercase tracking-wide">Top Download Branch</div>
+                    <div className="text-xl font-semibold text-amber-700">
+                      {branchDownloadLeader ? `${branchDownloadLeader.name} (${branchDownloadLeader.code})` : "No data"}
+                    </div>
+                  </div>
+                  <div className="text-right text-sm text-amber-500">
+                    {branchDownloadLeader ? `${formatNumber(branchDownloadLeader.download_count)} downloads • ${branchLeaderShare}% share` : "—"}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -741,40 +1232,53 @@ export default function ComprehensiveAnalytics() {
           {/* Platform Overview */}
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-lg">
             <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-              <Globe
-                className="w-5 h-
-5 mr-2 text-purple-600"
-              />
+              <Globe className="w-5 h-5 mr-2 text-purple-600" />
               Platform Overview
             </h3>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <div className="font-medium text-gray-900">Active Users</div>
-                  <div className="text-sm text-gray-500">Registered</div>
+            <div className="space-y-4">
+              <div className="p-4 bg-gray-50 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide">Active Users</div>
+                    <div className="text-2xl font-bold text-gray-900">{formatNumber(overallStats.totalUsers)}</div>
+                  </div>
+                  <div className="text-right text-sm text-blue-500">
+                    {overallStats.totalBranches} branches • {formatNumber(overallStats.totalSubjects)} subjects
+                  </div>
                 </div>
-                <div className="text-xl font-bold text-gray-900">{overallStats.totalUsers}</div>
               </div>
-              <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <div className="font-medium text-gray-900">Content Library</div>
-                  <div className="text-sm text-gray-500">Verified notes</div>
+              <div className="p-4 bg-gray-50 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide">Content Library</div>
+                    <div className="text-2xl font-bold text-gray-900">
+                      {formatNumber(totalContentItems)} items
+                    </div>
+                  </div>
+                  <div className="text-right text-sm text-purple-500">
+                    Notes {formatNumber(overallStats.totalNotes)} • PYQs {formatNumber(overallStats.totalPyqs)} • Syllabus {formatNumber(overallStats.totalSyllabusDocs)}
+                  </div>
                 </div>
-                <div className="text-xl font-bold text-gray-900">{overallStats.totalNotes}</div>
               </div>
-              <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <div className="font-medium text-gray-900">Events Published</div>
-                  <div className="text-sm text-gray-500">Active events</div>
+              <div className="p-4 bg-gray-50 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide">Events & Opportunities</div>
+                    <div className="text-2xl font-bold text-gray-900">{formatNumber(overallStats.totalEvents + overallStats.totalOpportunities)}</div>
+                  </div>
+                  <div className="text-right text-sm text-amber-500">{formatNumber(overallStats.totalBookmarks)} bookmarks</div>
                 </div>
-                <div className="text-xl font-bold text-gray-900">{overallStats.totalEvents}</div>
               </div>
-              <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <div className="font-medium text-gray-900">Opportunities</div>
-                  <div className="text-sm text-gray-500">Available</div>
+              <div className="p-4 bg-gray-50 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide">Resource Downloads</div>
+                    <div className="text-2xl font-bold text-gray-900">{formatNumber(overallStats.totalDownloads)}</div>
+                  </div>
+                  <div className="text-right text-sm text-green-500">
+                    Notes {getDownloadShare(overallStats.totalNoteDownloads)}% • PYQs {getDownloadShare(overallStats.totalPyqDownloads)}% • Syllabus {getDownloadShare(overallStats.totalSyllabusDownloads)}%
+                  </div>
                 </div>
-                <div className="text-xl font-bold text-gray-900">{overallStats.totalOpportunities}</div>
               </div>
             </div>
           </div>
@@ -801,27 +1305,71 @@ export default function ComprehensiveAnalytics() {
             </div>
           </div>
 
-          {/* Compact Chart */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <HighlightCard
+              tone="blue"
+              label="Engagement Volume"
+              value={formatNumber(totalDownloadsInRange)}
+              detail={`${formatNumber(totalUniqueDownloadersInRange)} unique downloaders • ${uniqueDownloaderShare}% of user base`}
+            />
+            <HighlightCard
+              tone="green"
+              label="Downloads per User"
+              value={avgDownloadsPerUserRange}
+              detail={
+                peakDownloadsPerUserLabel === "—"
+                  ? "Peak —"
+                  : `Peak ${peakDownloadsPerUserLabel} • ${peakDownloadsPerUserDisplay}`
+              }
+            />
+            <HighlightCard
+              tone="purple"
+              label="Resource Uploads"
+              value={formatNumber(totalResourceUploadsInRange)}
+              detail={`Avg ${avgResourceUploadsPerDay} uploads/day`}
+            >
+              <div className="mt-2 space-y-1 text-xs text-purple-500">
+                <div>Notes • {formatNumber(totalNotesUploadedInRange)} ({resourceUploadMix.notes}%)</div>
+                <div>PYQs • {formatNumber(totalPyqsUploadedInRange)} ({resourceUploadMix.pyqs}%)</div>
+                <div>Syllabus • {formatNumber(totalSyllabusUploadedInRange)} ({resourceUploadMix.syllabus}%)</div>
+              </div>
+            </HighlightCard>
+            <HighlightCard
+              tone="amber"
+              label="Top Download Day"
+              value={topDownloadDayLabel === "—" ? "—" : topDownloadDayLabel}
+              detail={
+                topDownloadDayLabel === "—"
+                  ? "No download activity"
+                  : `${formatNumber(topDownloadDayValue)} downloads`
+              }
+            />
+          </div>
+
           <div className="h-24 mb-4 relative">
             <div className="flex items-end h-full space-x-0.5">
               {dailyActivity
                 .slice(selectedTimeRange === "lifetime" ? Math.max(-60, -dailyActivity.length) : -14)
-                .map((day, index) => {
-                  const maxValue = Math.max(...dailyActivity.map((d) => d.downloads)) || 1;
-                  const height = Math.max((day.downloads / maxValue) * 100, 2);
+                .map((day) => {
+                  const height = Math.max((day.downloads / maxChartDownloads) * 100, 2);
                   return (
                     <div key={day.date} className="flex-1 group relative">
                       <div
                         className="bg-blue-500 hover:bg-blue-600 transition-colors rounded-t w-full"
                         style={{ height: `${height}%` }}
                       />
-                      {/* Tooltip */}
                       <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">
                         {new Date(day.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                         <br />
-                        {day.downloads} downloads
+                        {formatNumber(day.downloads)} downloads
                         <br />
-                        {day.new_users} new users
+                        {formatNumber(day.unique_downloaders)} unique downloaders
+                        <br />
+                        {day.downloads_per_user} downloads/user
+                        <br />
+                        {formatNumber(day.new_users)} new users
+                        <br />
+                        Notes {formatNumber(day.notes_uploaded)} • PYQs {formatNumber(day.pyqs_uploaded)} • Syllabus {formatNumber(day.syllabus_uploaded)}
                       </div>
                     </div>
                   );
@@ -829,10 +1377,9 @@ export default function ComprehensiveAnalytics() {
             </div>
           </div>
 
-          {/* Summary Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-4">
             {selectedTimeRange === "lifetime" && (
-              <div className="col-span-2 md:col-span-4 mb-2">
+              <div className="col-span-2 md:col-span-4 xl:col-span-6 mb-2">
                 <div className="text-center p-2 bg-gradient-to-r from-purple-100 to-blue-100 rounded-lg">
                   <span className="text-sm font-semibold text-purple-700">
                     📊 Lifetime Analytics - Complete Platform History
@@ -840,174 +1387,86 @@ export default function ComprehensiveAnalytics() {
                 </div>
               </div>
             )}
-            <div className="text-center p-3 bg-blue-50 rounded-lg">
-              <div className="text-xl font-bold text-blue-600">
-                {dailyActivity.reduce((sum, day) => sum + day.downloads, 0)}
-              </div>
-              <div className="text-xs text-gray-600 mt-1">Total Downloads</div>
-            </div>
-            <div className="text-center p-3 bg-green-50 rounded-lg">
-              <div className="text-xl font-bold text-green-600">
-                {dailyActivity.reduce((sum, day) => sum + day.new_users, 0)}
-              </div>
-              <div className="text-xs text-gray-600 mt-1">New Users</div>
-            </div>
-            <div className="text-center p-3 bg-purple-50 rounded-lg">
-              <div className="text-xl font-bold text-purple-600">
-                {dailyActivity.reduce((sum, day) => sum + day.notes_uploaded, 0)}
-              </div>
-              <div className="text-xs text-gray-600 mt-1">Notes Uploaded</div>
-            </div>
-            <div className="text-center p-3 bg-orange-50 rounded-lg">
-              <div className="text-xl font-bold text-orange-600">
-                {dailyActivity.length > 0
-                  ? Math.round(dailyActivity.reduce((sum, day) => sum + day.downloads, 0) / dailyActivity.length)
-                  : 0}
-              </div>
-              <div className="text-xs text-gray-600 mt-1">
-                {selectedTimeRange === "lifetime" ? "Lifetime Avg/Day" : "Avg Daily Downloads"}
-              </div>
-            </div>
+            <SummaryCard tone="blue" value={formatNumber(totalDownloadsInRange)} label="Total Downloads" />
+            <SummaryCard tone="indigo" value={formatNumber(totalUniqueDownloadersInRange)} label="Unique Downloaders" />
+            <SummaryCard tone="sky" value={`${uniqueDownloaderShare}%`} label="User Reach" />
+            <SummaryCard tone="green" value={formatNumber(totalNewUsersInRange)} label="New Users" />
+            <SummaryCard
+              tone="orange"
+              value={formatNumber(avgDownloadsPerActiveDay)}
+              label={selectedTimeRange === "lifetime" ? "Lifetime Avg/Day" : "Avg Daily Downloads"}
+            />
+            <SummaryCard tone="lime" value={avgDownloadsPerUserRange} label="Avg Downloads/User" />
+            <SummaryCard tone="purple" value={formatNumber(totalResourceUploadsInRange)} label="Total Resource Uploads" />
+            <SummaryCard tone="emerald" value={avgResourceUploadsPerDay} label="Avg Uploads/Day" />
+            <SummaryCard tone="violet" value={formatNumber(totalNotesUploadedInRange)} label="Notes Uploaded" />
+            <SummaryCard tone="amber" value={formatNumber(totalPyqsUploadedInRange)} label="PYQs Uploaded" />
+            <SummaryCard tone="rose" value={formatNumber(totalSyllabusUploadedInRange)} label="Syllabus Uploaded" />
             {selectedTimeRange === "lifetime" && (
-              <div className="text-center p-3 bg-indigo-50 rounded-lg">
-                <div className="text-xl font-bold text-indigo-600">{dailyActivity.length}</div>
-                <div className="text-xs text-gray-600 mt-1">Days Active</div>
-              </div>
+              <SummaryCard tone="indigo" value={formatNumber(dailyActivity.length)} label="Days Active" />
             )}
           </div>
         </div>
 
-        {/* Charts Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Branch Performance */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-lg">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-              <Building className="w-5 h-5 mr-2 text-green-600" />
-              Branch Performance
-            </h3>
-            <div className="space-y-3 max-h-72 overflow-y-auto">
-              {branchStats.slice(0, 6).map((branch, index) => {
-                const maxDownloads = Math.max(...branchStats.map((b) => b.download_count)) || 1;
-                const downloadPercentage = (branch.download_count / maxDownloads) * 100;
-
-                return (
-                  <div key={branch.id} className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
-                          {branch.code}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium text-gray-900 truncate">{branch.name}</div>
-                          <div className="text-sm text-gray-500">{branch.user_count} students</div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold text-gray-900">{branch.download_count}</div>
-                        <div className="text-sm text-gray-500">downloads</div>
-                      </div>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div
-                        className="bg-gradient-to-r from-blue-400 to-blue-600 h-2 rounded-full transition-all duration-500"
-                        style={{ width: `${downloadPercentage}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+        {/* Most Active Users */}
+        <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-lg">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+            <Award className="w-5 h-5 mr-2 text-red-600" />
+            Most Active Users
+          </h3>
+          <div className="flex items-center justify-between mb-2 text-xs text-gray-500">
+            <span>Ranking top contributors by downloads & engagement</span>
+            <span className="italic">Based on lifetime activity</span>
           </div>
-        </div>
+          <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+            {activeUsers.slice(0, 8).map((user, index) => {
+              const tierStyles =
+                index === 0
+                  ? "bg-yellow-100 text-yellow-700"
+                  : index === 1
+                    ? "bg-gray-100 text-gray-600"
+                    : index === 2
+                      ? "bg-orange-100 text-orange-600"
+                      : "bg-blue-100 text-blue-600";
 
-        {/* Top Content and Active Users */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Most Downloaded Notes */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-lg">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-              <Star className="w-5 h-5 mr-2 text-yellow-600" />
-              Most Downloaded Notes
-            </h3>
-            <div className="space-y-3">
-              {popularNotes.slice(0, 10).map((note, index) => (
-                <div
-                  key={note.note_id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center space-x-4">
-                    <div
-                      className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                        index === 0
-                          ? "bg-yellow-100 text-yellow-600"
-                          : index === 1
-                            ? "bg-gray-100 text-gray-600"
-                            : index === 2
-                              ? "bg-orange-100 text-orange-600"
-                              : "bg-blue-100 text-blue-600"
-                      }`}
-                    >
-                      <span className="text-sm font-bold">#{index + 1}</span>
-                    </div>
-                    <div>
-                      <p className="font-medium text-gray-900 line-clamp-1">{note.title}</p>
-                      <p className="text-sm text-gray-500">
-                        {note.subject_code} • {note.subject_name}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-gray-900 flex items-center">
-                      <Download className="w-4 h-4 mr-1" />
-                      {note.download_count}
-                    </p>
-                    <p className="text-sm text-gray-500">downloads</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Most Active Users */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-lg">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-              <Award className="w-5 h-5 mr-2 text-red-600" />
-              Most Active Users
-            </h3>
-            <div className="space-y-3 max-h-72 overflow-y-auto">
-              {activeUsers.slice(0, 6).map((user, index) => (
+              return (
                 <div
                   key={user.user_id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                  className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-white border border-transparent hover:border-blue-100 transition-colors"
                 >
                   <div className="flex items-center space-x-4">
-                    <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
-                      {user.name.charAt(0).toUpperCase()}
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold ${tierStyles}`}>
+                      #{index + 1}
                     </div>
                     <div>
                       <div className="flex items-center space-x-2">
-                        <p className="font-medium text-gray-900">{user.name}</p>
+                        <p className="font-semibold text-gray-900 leading-tight">{user.name}</p>
                         {user.is_admin && <Shield className="w-4 h-4 text-blue-500" />}
                       </div>
-                      <p className="text-sm text-gray-500">
-                        {user.branch_name} • Sem {user.semester}
-                      </p>
+                      <div className="text-xs text-gray-500">
+                        {user.branch_name} • Sem {user.semester} • Last login {formatDate(user.last_login)}
+                      </div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="flex items-center space-x-4">
-                      <div className="text-center">
-                        <div className="font-semibold text-blue-600">{user.total_downloads}</div>
-                        <div className="text-xs text-gray-500">downloads</div>
+                  <div className="flex items-center space-x-6 text-right">
+                    <div>
+                      <div className="flex items-center justify-end text-sm font-semibold text-blue-600">
+                        <Download className="w-4 h-4 mr-1" />
+                        {formatNumber(user.total_downloads)}
                       </div>
-                      <div className="text-center">
-                        <div className="font-semibold text-green-600">{user.saved_opportunities}</div>
-                        <div className="text-xs text-gray-500">bookmarks</div>
+                      <div className="text-xs text-gray-500">Downloads</div>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-end text-sm font-semibold text-green-600">
+                        <BookmarkIcon className="w-4 h-4 mr-1" />
+                        {formatNumber(user.saved_opportunities)}
                       </div>
+                      <div className="text-xs text-gray-500">Bookmarks</div>
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
         </div>
 
