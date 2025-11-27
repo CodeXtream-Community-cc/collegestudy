@@ -61,7 +61,7 @@ interface TimetableEntry {
 
 interface ExamSchedule {
   id: string;
-  branch_id: string;
+  branch_id?: string; // Keeping for backward compatibility
   semester: number;
   subject_id: string;
   exam_type: string;
@@ -72,6 +72,14 @@ interface ExamSchedule {
   total_marks?: number;
   instructions?: string;
   created_at: string;
+  exam_schedule_branches?: {
+    branch_id: string;
+    branches?: {
+      id: string;
+      name: string;
+      code: string;
+    };
+  }[];
   subjects?: {
     id: string;
     name: string;
@@ -117,7 +125,7 @@ export default function TimetablePage() {
 
   // Form state for Exam
   const [examForm, setExamForm] = useState({
-    branch_id: "",
+    branch_ids: [] as string[], // Multiple branches
     semester: 1,
     subject_id: "",
     exam_type: "Mid Sem 1",
@@ -214,9 +222,17 @@ export default function TimetablePage() {
         const { data: timetableData } = await timetableQuery.order("day_of_week").order("start_time");
         setTimetableEntries(timetableData || []);
       } else {
-        // Fetch exam schedules
+        // Fetch exam schedules with multiple branches support
         let examQuery = supabase.from("exam_schedule").select(`
             *,
+            exam_schedule_branches (
+              branch_id,
+              branches (
+                id,
+                name,
+                code
+              )
+            ),
             subjects (
               id,
               name,
@@ -228,8 +244,9 @@ export default function TimetablePage() {
             )
           `);
 
+        // Filter by selected branch if specified
         if (selectedBranch) {
-          examQuery = examQuery.eq("branch_id", selectedBranch);
+          examQuery = examQuery.eq("exam_schedule_branches.branch_id", selectedBranch);
         }
         if (selectedSemester) {
           examQuery = examQuery.eq("semester", parseInt(selectedSemester));
@@ -288,8 +305,38 @@ export default function TimetablePage() {
 
   const handleAddExam = async () => {
     try {
-      const { error } = await supabase.from("exam_schedule").insert([examForm]);
-      if (error) throw error;
+      // Insert exam schedule first
+      const { data: examData, error: examError } = await supabase
+        .from("exam_schedule")
+        .insert([{
+          semester: examForm.semester,
+          subject_id: examForm.subject_id,
+          exam_type: examForm.exam_type,
+          exam_date: examForm.exam_date,
+          start_time: examForm.start_time,
+          end_time: examForm.end_time,
+          room_number: examForm.room_number,
+          total_marks: examForm.total_marks,
+          instructions: examForm.instructions,
+        }])
+        .select()
+        .single();
+
+      if (examError) throw examError;
+
+      // Insert branch associations
+      if (examForm.branch_ids.length > 0) {
+        const branchAssociations = examForm.branch_ids.map(branch_id => ({
+          exam_schedule_id: examData.id,
+          branch_id
+        }));
+
+        const { error: branchError } = await supabase
+          .from("exam_schedule_branches")
+          .insert(branchAssociations);
+
+        if (branchError) throw branchError;
+      }
 
       setShowAddModal(false);
       resetExamForm();
@@ -303,8 +350,44 @@ export default function TimetablePage() {
   const handleUpdateExam = async () => {
     if (!editingItem) return;
     try {
-      const { error } = await supabase.from("exam_schedule").update(examForm).eq("id", editingItem.id);
-      if (error) throw error;
+      // Update exam schedule
+      const { error: examError } = await supabase
+        .from("exam_schedule")
+        .update({
+          semester: examForm.semester,
+          subject_id: examForm.subject_id,
+          exam_type: examForm.exam_type,
+          exam_date: examForm.exam_date,
+          start_time: examForm.start_time,
+          end_time: examForm.end_time,
+          room_number: examForm.room_number,
+          total_marks: examForm.total_marks,
+          instructions: examForm.instructions,
+        })
+        .eq("id", editingItem.id);
+
+      if (examError) throw examError;
+
+      // Update branch associations - delete existing and insert new ones
+      const { error: deleteError } = await supabase
+        .from("exam_schedule_branches")
+        .delete()
+        .eq("exam_schedule_id", editingItem.id);
+
+      if (deleteError) throw deleteError;
+
+      if (examForm.branch_ids.length > 0) {
+        const branchAssociations = examForm.branch_ids.map(branch_id => ({
+          exam_schedule_id: editingItem.id,
+          branch_id
+        }));
+
+        const { error: insertError } = await supabase
+          .from("exam_schedule_branches")
+          .insert(branchAssociations);
+
+        if (insertError) throw insertError;
+      }
 
       setEditingItem(null);
       resetExamForm();
@@ -318,6 +401,15 @@ export default function TimetablePage() {
   const handleDeleteExam = async (id: string) => {
     if (!confirm("Are you sure you want to delete this exam schedule?")) return;
     try {
+      // Delete from junction table first (will cascade due to foreign key constraint)
+      const { error: branchError } = await supabase
+        .from("exam_schedule_branches")
+        .delete()
+        .eq("exam_schedule_id", id);
+
+      if (branchError) throw branchError;
+
+      // Delete the exam schedule
       const { error } = await supabase.from("exam_schedule").delete().eq("id", id);
       if (error) throw error;
       fetchData();
@@ -390,8 +482,12 @@ export default function TimetablePage() {
   const handleDeleteAllExams = async () => {
     const semesterNumber = selectedSemester ? parseInt(selectedSemester, 10) : null;
     const hasMatchingEntries = examSchedules.some((exam) => {
-      if (selectedBranch && exam.branch_id !== selectedBranch) {
-        return false;
+      // Check if exam matches the selected branch filter
+      if (selectedBranch) {
+        const hasSelectedBranch = exam.exam_schedule_branches?.some(
+          esb => esb.branch_id === selectedBranch
+        ) || exam.branch_id === selectedBranch;
+        if (!hasSelectedBranch) return false;
       }
       if (semesterNumber !== null && exam.semester !== semesterNumber) {
         return false;
@@ -413,15 +509,45 @@ export default function TimetablePage() {
     }
 
     try {
-      let deleteQuery = supabase.from("exam_schedule").delete();
+      // First, get the exam IDs that match the criteria
+      let examQuery = supabase.from("exam_schedule").select("id");
+      
       if (selectedBranch) {
-        deleteQuery = deleteQuery.eq("branch_id", selectedBranch);
+        examQuery = examQuery.in("id", 
+          examSchedules
+            .filter(exam => 
+              exam.exam_schedule_branches?.some(esb => esb.branch_id === selectedBranch) ||
+              exam.branch_id === selectedBranch
+            )
+            .map(exam => exam.id)
+        );
       }
       if (semesterNumber !== null) {
-        deleteQuery = deleteQuery.eq("semester", semesterNumber);
+        examQuery = examQuery.eq("semester", semesterNumber);
       }
-      const { error } = await deleteQuery;
-      if (error) throw error;
+      
+      const { data: matchingExams } = await examQuery;
+      
+      if (matchingExams && matchingExams.length > 0) {
+        const examIds = matchingExams.map(exam => exam.id);
+        
+        // Delete from junction table first
+        const { error: branchError } = await supabase
+          .from("exam_schedule_branches")
+          .delete()
+          .in("exam_schedule_id", examIds);
+          
+        if (branchError) throw branchError;
+        
+        // Delete the exam schedules
+        const { error } = await supabase
+          .from("exam_schedule")
+          .delete()
+          .in("id", examIds);
+          
+        if (error) throw error;
+      }
+      
       fetchData();
     } catch (error) {
       console.error("Error deleting exam schedules:", error);
@@ -445,7 +571,7 @@ export default function TimetablePage() {
 
   const resetExamForm = () => {
     setExamForm({
-      branch_id: "",
+      branch_ids: [],
       semester: 1,
       subject_id: "",
       exam_type: "Mid Sem 1",
@@ -475,8 +601,13 @@ export default function TimetablePage() {
 
   const openEditExam = (exam: ExamSchedule) => {
     setEditingItem(exam);
+    
+    // Extract branch IDs from exam_schedule_branches or fall back to branch_id for backward compatibility
+    const branchIds = exam.exam_schedule_branches?.map(esb => esb.branch_id) || 
+                      (exam.branch_id ? [exam.branch_id] : []);
+    
     setExamForm({
-      branch_id: exam.branch_id,
+      branch_ids: branchIds,
       semester: exam.semester,
       subject_id: exam.subject_id,
       exam_type: exam.exam_type,
@@ -879,7 +1010,9 @@ function ExamTable({
                       <div className="flex items-center gap-2 text-gray-600">
                         <BookOpen size={16} />
                         <span>
-                          Sem {exam.semester} - {exam.subjects?.branches?.name}
+                          Sem {exam.semester} - 
+                          {exam.exam_schedule_branches?.map(esb => esb.branches?.name).filter(Boolean).join(", ") || 
+                           exam.subjects?.branches?.name}
                         </span>
                       </div>
                     </div>
@@ -1109,45 +1242,59 @@ function ExamForm({
   onSubmit: () => void;
   onCancel: () => void;
 }) {
+  // Filter subjects based on selected branches and semester
   const filteredSubjects = subjects.filter(
-    (s) => s.branch_ids?.includes(form.branch_id) && s.semester === form.semester,
+    (s) => 
+      s.semester === form.semester && 
+      (form.branch_ids.length === 0 || s.branch_ids?.some(branchId => form.branch_ids.includes(branchId)))
   );
+
+  const handleBranchToggle = (branchId: string) => {
+    const newBranchIds = form.branch_ids.includes(branchId)
+      ? form.branch_ids.filter((id: string) => id !== branchId)
+      : [...form.branch_ids, branchId];
+    
+    setForm({ ...form, branch_ids: newBranchIds, subject_id: "" });
+  };
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Branch *</label>
-          <select
-            value={form.branch_id}
-            onChange={(e) => setForm({ ...form, branch_id: e.target.value, subject_id: "" })}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            required
-          >
-            <option value="">Select Branch</option>
-            {branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Branches *</label>
+        <div className="border border-gray-300 rounded-lg p-3 max-h-48 overflow-y-auto">
+          {branches.map((branch) => (
+            <label key={branch.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+              <input
+                type="checkbox"
+                checked={form.branch_ids.includes(branch.id)}
+                onChange={() => handleBranchToggle(branch.id)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm">
                 {branch.name} ({branch.code})
-              </option>
-            ))}
-          </select>
+              </span>
+            </label>
+          ))}
         </div>
+        {form.branch_ids.length === 0 && (
+          <p className="text-xs text-red-500 mt-1">Please select at least one branch</p>
+        )}
+      </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Semester *</label>
-          <select
-            value={form.semester}
-            onChange={(e) => setForm({ ...form, semester: parseInt(e.target.value), subject_id: "" })}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            required
-          >
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
-              <option key={sem} value={sem}>
-                Semester {sem}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Semester *</label>
+        <select
+          value={form.semester}
+          onChange={(e) => setForm({ ...form, semester: parseInt(e.target.value), subject_id: "" })}
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          required
+        >
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
+            <option key={sem} value={sem}>
+              Semester {sem}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div>
@@ -1157,7 +1304,7 @@ function ExamForm({
           onChange={(e) => setForm({ ...form, subject_id: e.target.value })}
           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
           required
-          disabled={!form.branch_id}
+          disabled={form.branch_ids.length === 0}
         >
           <option value="">Select Subject</option>
           {filteredSubjects.map((subject) => (
@@ -1267,7 +1414,7 @@ function ExamForm({
           type="button"
           onClick={onSubmit}
           className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          disabled={!form.branch_id || !form.subject_id || !form.exam_date || !form.start_time || !form.end_time}
+          disabled={!form.branch_ids.length || !form.subject_id || !form.exam_date || !form.start_time || !form.end_time}
         >
           Save
         </button>
