@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { supabase } from "../../src/lib/supabase";
-import { ArrowLeft, Globe, FileText, ExternalLink, TrendingUp, Target, Clock, Users, Star, Download, Eye } from "lucide-react-native";
+import { ArrowLeft, Globe, FileText, ExternalLink, TrendingUp, Target, Clock, Users, Star, Download, Eye, ChevronDown } from "lucide-react-native";
 
 // Updated interfaces for unified schema
 interface Topic {
@@ -60,6 +60,7 @@ export default function DevelopmentNotes() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     loadTopicsAndNotes();
@@ -103,6 +104,20 @@ export default function DevelopmentNotes() {
       );
 
       setTopics(topicsWithNotes);
+      setExpandedTopics((prev) => {
+        const next = { ...prev };
+        topicsWithNotes.forEach((topic) => {
+          if (next[topic.id] === undefined) {
+            next[topic.id] = false;
+          }
+        });
+        Object.keys(next).forEach((key) => {
+          if (!topicsWithNotes.find((topic) => topic.id === key)) {
+            delete next[key];
+          }
+        });
+        return next;
+      });
     } catch (error) {
       console.log("Could not load Development content - may be empty or permission restricted");
       // Don't show alert for empty data - just show empty state
@@ -115,6 +130,13 @@ export default function DevelopmentNotes() {
     setRefreshing(true);
     await loadTopicsAndNotes();
     setRefreshing(false);
+  };
+
+  const toggleTopic = (topicId: string) => {
+    setExpandedTopics((prev) => ({
+      ...prev,
+      [topicId]: !prev[topicId],
+    }));
   };
 
   const handleDownload = async (note: Resource) => {
@@ -200,99 +222,115 @@ export default function DevelopmentNotes() {
       >
         {topics.map((topic) => (
           <View key={topic.id} style={styles.topicCard}>
-            <View style={styles.topicHeader}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => toggleTopic(topic.id)}
+              style={styles.topicHeader}
+            >
               <View style={styles.topicInfo}>
                 <Text style={styles.topicTitle}>{topic.title}</Text>
                 <Text style={styles.topicDescription}>{topic.description}</Text>
+                <Text style={styles.resourceCount}>{topic.notes.length} resources</Text>
               </View>
-              <View style={[styles.difficultyBadge, { backgroundColor: getDifficultyColor(topic.difficulty) }]}>
-                <Text style={styles.difficultyText}>{topic.difficulty}</Text>
+              <View style={styles.topicHeaderRight}>
+                <View style={[styles.difficultyBadge, { backgroundColor: getDifficultyColor(topic.difficulty) }]}>
+                  <Text style={styles.difficultyText}>{topic.difficulty}</Text>
+                </View>
+                <ChevronDown
+                  size={18}
+                  color="#6B7280"
+                  style={expandedTopics[topic.id] ? styles.chevronExpanded : styles.chevronCollapsed}
+                />
               </View>
-            </View>
+            </TouchableOpacity>
 
-            <View style={styles.topicStats}>
-              <View style={styles.statItem}>
-                <FileText size={16} color="#6B7280" />
-                <Text style={styles.statText}>{topic.notes.length} notes</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Download size={16} color="#6B7280" />
-                <Text style={styles.statText}>
-                  {topic.notes.reduce((sum, note) => sum + (note.downloads || 0), 0)} downloads
-                </Text>
-              </View>
-            </View>
+            {expandedTopics[topic.id] && (
+              <>
+                <View style={styles.topicStats}>
+                  <View style={styles.statItem}>
+                    <FileText size={16} color="#6B7280" />
+                    <Text style={styles.statText}>{topic.notes.length} notes</Text>
+                  </View>
+                  <View style={styles.statItem}>
+                    <Download size={16} color="#6B7280" />
+                    <Text style={styles.statText}>
+                      {topic.notes.reduce((sum, note) => sum + (note.downloads || 0), 0)} downloads
+                    </Text>
+                  </View>
+                </View>
 
-            {topic.notes.length > 0 ? (
-              <View style={styles.notesContainer}>
-                {topic.notes.map((note) => (
-                  <TouchableOpacity
-                    key={note.id}
-                    style={styles.noteCard}
-                    onPress={() => handleDownload(note)}
-                  >
-                    <View style={styles.noteHeader}>
-                      <View style={styles.noteInfo}>
-                        <Text style={styles.noteTitle}>{note.title}</Text>
-                        <Text style={styles.noteDescription} numberOfLines={2}>
-                          {note.description}
-                        </Text>
-                      </View>
-                      {note.is_featured && (
-                        <View style={styles.featuredBadge}>
-                          <Star size={12} color="#F59E0B" />
+                {topic.notes.length > 0 ? (
+                  <View style={styles.notesContainer}>
+                    {topic.notes.map((note) => (
+                      <TouchableOpacity
+                        key={note.id}
+                        style={styles.noteCard}
+                        onPress={() => handleDownload(note)}
+                      >
+                        <View style={styles.noteHeader}>
+                          <View style={styles.noteInfo}>
+                            <Text style={styles.noteTitle}>{note.title}</Text>
+                            <Text style={styles.noteDescription} numberOfLines={2}>
+                              {note.description}
+                            </Text>
+                          </View>
+                          {note.is_featured && (
+                            <View style={styles.featuredBadge}>
+                              <Star size={12} color="#F59E0B" />
+                            </View>
+                          )}
                         </View>
-                      )}
-                    </View>
 
-                    <View style={styles.noteDetails}>
-                      <View style={styles.noteMetadata}>
-                        <Text style={styles.fileType}>{note.file_type?.toUpperCase()}</Text>
-                        <Text style={styles.fileSize}>{formatFileSize(note.file_size)}</Text>
-                      </View>
-                      <View style={styles.noteStats}>
-                        <View style={styles.statItem}>
-                          <Download size={14} color="#6B7280" />
-                          <Text style={styles.statValue}>{note.downloads}</Text>
+                        <View style={styles.noteDetails}>
+                          <View style={styles.noteMetadata}>
+                            <Text style={styles.fileType}>{note.file_type?.toUpperCase()}</Text>
+                            <Text style={styles.fileSize}>{formatFileSize(note.file_size)}</Text>
+                          </View>
+                          <View style={styles.noteStats}>
+                            <View style={styles.statItem}>
+                              <Download size={14} color="#6B7280" />
+                              <Text style={styles.statValue}>{note.downloads}</Text>
+                            </View>
+                            <View style={styles.statItem}>
+                              <Eye size={14} color="#6B7280" />
+                              <Text style={styles.statValue}>{note.views}</Text>
+                            </View>
+                            {note.rating > 0 && (
+                              <View style={styles.statItem}>
+                                <Star size={14} color="#F59E0B" />
+                                <Text style={styles.statValue}>{note.rating.toFixed(1)}</Text>
+                              </View>
+                            )}
+                          </View>
                         </View>
-                        <View style={styles.statItem}>
-                          <Eye size={14} color="#6B7280" />
-                          <Text style={styles.statValue}>{note.views}</Text>
-                        </View>
-                        {note.rating > 0 && (
-                          <View style={styles.statItem}>
-                            <Star size={14} color="#F59E0B" />
-                            <Text style={styles.statValue}>{note.rating.toFixed(1)}</Text>
+
+                        {note.tags && note.tags.length > 0 && (
+                          <View style={styles.tagsContainer}>
+                            {note.tags.slice(0, 3).map((tag, index) => (
+                              <View key={index} style={styles.tag}>
+                                <Text style={styles.tagText}>{tag}</Text>
+                              </View>
+                            ))}
+                            {note.tags.length > 3 && (
+                              <Text style={styles.moreTagsText}>+{note.tags.length - 3} more</Text>
+                            )}
                           </View>
                         )}
-                      </View>
-                    </View>
 
-                    {note.tags && note.tags.length > 0 && (
-                      <View style={styles.tagsContainer}>
-                        {note.tags.slice(0, 3).map((tag, index) => (
-                          <View key={index} style={styles.tag}>
-                            <Text style={styles.tagText}>{tag}</Text>
-                          </View>
-                        ))}
-                        {note.tags.length > 3 && (
-                          <Text style={styles.moreTagsText}>+{note.tags.length - 3} more</Text>
-                        )}
-                      </View>
-                    )}
-
-                    <View style={styles.downloadButton}>
-                      <ExternalLink size={16} color="#10B981" />
-                      <Text style={styles.downloadButtonText}>Download</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <View style={styles.emptyState}>
-                <FileText size={48} color="#D1D5DB" />
-                <Text style={styles.emptyStateText}>No notes available for this topic</Text>
-              </View>
+                        <View style={styles.downloadButton}>
+                          <ExternalLink size={16} color="#10B981" />
+                          <Text style={styles.downloadButtonText}>Download</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.emptyState}>
+                    <FileText size={48} color="#D1D5DB" />
+                    <Text style={styles.emptyStateText}>No notes available for this topic</Text>
+                  </View>
+                )}
+              </>
             )}
           </View>
         ))}
@@ -379,7 +417,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 12,
+    marginBottom: 8,
   },
   topicInfo: {
     flex: 1,
@@ -395,6 +433,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#6B7280",
     lineHeight: 20,
+  },
+  resourceCount: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    marginTop: 6,
+  },
+  topicHeaderRight: {
+    alignItems: "flex-end",
   },
   difficultyBadge: {
     paddingHorizontal: 8,
@@ -524,9 +570,16 @@ const styles = StyleSheet.create({
   },
   downloadButtonText: {
     fontSize: 14,
-    fontWeight: "500",
+    fontWeight: "600",
     color: "#10B981",
     marginLeft: 4,
+  },
+  chevronCollapsed: {
+    marginTop: 8,
+  },
+  chevronExpanded: {
+    marginTop: 8,
+    transform: [{ rotate: "180deg" }],
   },
   emptyState: {
     alignItems: "center",

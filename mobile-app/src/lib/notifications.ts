@@ -71,37 +71,65 @@ export async function loadUserNotifications(userId: string, limit: number = 20):
   }
 }
 
+// Simple implementation without retries or timeouts
 export async function getUnreadCount(userId: string): Promise<number> {
+  if (!userId) {
+    console.warn('getUnreadCount called without userId');
+    return 0;
+  }
+
   try {
+    console.log('Fetching unread count for user:', userId);
+    
+    // Check Supabase connection
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError) {
+      console.error('Session error in getUnreadCount:', sessionError);
+      return 0;
+    }
+    
+    if (!sessionData?.session) {
+      console.warn('No active session when fetching unread count');
+      return 0;
+    }
+
     const { data, error } = await supabase
       .from("user_notifications")
-      .select(
-        `
+      .select(`
         id,
-        notifications!inner (
+        notifications!inner ( 
           expires_at,
           is_published
         )
-      `,
-      )
+      `)
       .eq("user_id", userId)
-      .eq("is_read", false);
+      .eq("is_read", false)
+      .limit(100);
 
     if (error) {
       console.error("Error getting unread count:", error);
       return 0;
     }
 
+    if (!data) {
+      console.log('No unread notifications found for user:', userId);
+      return 0;
+    }
+
     // Filter out expired and unpublished notifications
     const now = new Date();
-    const validNotifications = (data || []).filter((item: any) => {
+    const validNotifications = data.filter((item: any) => {
       const notification = item.notifications;
-      if (!notification.is_published) return false;
+      if (!notification?.is_published) return false;
       if (notification.expires_at && new Date(notification.expires_at) <= now) return false;
       return true;
     });
 
-    return validNotifications.length;
+    const count = validNotifications.length;
+    console.log(`Found ${count} valid unread notifications`);
+    return count;
+    
   } catch (error) {
     console.error("Error in getUnreadCount:", error);
     return 0;

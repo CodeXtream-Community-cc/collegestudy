@@ -1,15 +1,24 @@
-import { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  RefreshControl,
-  Linking,
-  Alert,
-  ActivityIndicator,
-  Image,
+import { useEffect, useState, useCallback, createContext, useContext } from "react";
+import { useFocusEffect } from "expo-router";
+import * as FileSystem from 'expo-file-system';
+import * as WebBrowser from 'expo-web-browser';
+import * as IntentLauncher from 'expo-intent-launcher';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  ScrollView, 
+  TouchableOpacity, 
+  RefreshControl, 
+  Linking, 
+  Alert, 
+  ActivityIndicator, 
+  Image, 
+  PermissionsAndroid, 
+  Platform,
+  Share
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -58,6 +67,7 @@ interface Note {
   description?: string;
   file_url: string;
   file_type?: string;
+  download_count?: number;
   created_at: string;
   subjects?: {
     id: string;
@@ -103,6 +113,17 @@ interface ExamSchedule {
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+// Profile Refresh Context
+const ProfileRefreshContext = createContext<{
+  refreshProfile: () => Promise<void>;
+  lastRefreshTime: number;
+}>({
+  refreshProfile: async () => {},
+  lastRefreshTime: 0,
+});
+
+export const useProfileRefresh = () => useContext(ProfileRefreshContext);
+
 export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -110,7 +131,10 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [lastRefreshTime, setLastRefreshTime] = useState(0);
   const [recentNotes, setRecentNotes] = useState<Note[]>([]);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [downloadsDirectoryUri, setDownloadsDirectoryUri] = useState<string | null>(null);
   const [upcomingEvents, setUpcomingEvents] = useState<Event[]>([]);
   const [todayClasses, setTodayClasses] = useState<TimetableEntry[]>([]);
   const [upcomingExams, setUpcomingExams] = useState<ExamSchedule[]>([]);
@@ -122,6 +146,26 @@ export default function Home() {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // Refresh profile data when screen comes into focus (after editing profile)
+  useFocusEffect(
+    useCallback(() => {
+      console.log('Home screen focused, refreshing profile data');
+      loadData();
+    }, [])
+  );
+
+  // Profile refresh function that can be called from anywhere in the app
+  const refreshProfile = useCallback(async () => {
+    console.log('Profile refresh triggered at:', new Date().toISOString());
+    try {
+      await loadData();
+      setLastRefreshTime(Date.now());
+      console.log('Profile refresh completed successfully');
+    } catch (error) {
+      console.error('Profile refresh failed:', error);
+    }
   }, []);
 
   async function loadData() {
@@ -146,28 +190,48 @@ export default function Home() {
         setProfile(profileData);
 
         // Load recent notes for user's branch and semester
-        const { data: notesData } = await supabase
-          .from("notes")
-          .select(
-            `
-            *,
-            subjects!inner (
-              id,
-              name,
-              code,
-              branch_id,
-              semester
-            )
-          `,
-          )
-          .eq("is_verified", true)
-          .eq("subjects.branch_id", profileData.branch_id)
-          .eq("subjects.semester", profileData.semester)
-          .order("created_at", { ascending: false })
-          .limit(3);
+        console.log('Fetching notes for branch:', profileData.branch_id, 'semester:', profileData.semester);
+        
+        try {
+          // First, get the subject IDs for this branch and semester
+          const { data: subjects, error: subjectsError } = await supabase
+            .from('subjects')
+            .select('id')
+            .eq('branch_id', profileData.branch_id)
+            .eq('semester', profileData.semester);
 
-        if (notesData) {
-          setRecentNotes(notesData);
+          if (subjectsError) throw subjectsError;
+          
+          const subjectIds = subjects?.map(s => s.id) || [];
+          
+          if (subjectIds.length === 0) {
+            console.log('No subjects found for branch and semester');
+            setRecentNotes([]);
+          } else {
+            // Then get notes for these subjects
+            const { data: notesData, error: notesError } = await supabase
+              .from('notes')
+              .select(`
+                *,
+                subjects (
+                  id,
+                  name,
+                  code
+                )
+              `)
+              .in('subject_id', subjectIds)
+              .eq('is_verified', true)
+              .order('created_at', { ascending: false })
+              .limit(3);
+
+            if (notesError) throw notesError;
+            
+            console.log('Fetched notes:', notesData);
+            setRecentNotes(notesData || []);
+          }
+        } catch (error) {
+          console.error('Error in notes query:', error);
+          setRecentNotes([]);
         }
 
         // Load today's classes
@@ -212,13 +276,52 @@ export default function Home() {
           setUpcomingExams(examsData);
         }
 
-        // Load stats
-        const { count: notesCount } = await supabase
-          .from("notes")
-          .select("*, subjects!inner(*)", { count: "exact", head: true })
-          .eq("is_verified", true)
-          .eq("subjects.branch_id", profileData.branch_id)
-          .eq("subjects.semester", profileData.semester);
+        // Load stats - Total notes count
+        console.log('Fetching total notes count for branch:', profileData.branch_id, 'semester:', profileData.semester);
+        
+        try {
+          // First get the subject IDs for this branch and semester
+          const { data: subjects, error: subjectsError } = await supabase
+            .from('subjects')
+            .select('id')
+            .eq('branch_id', profileData.branch_id)
+            .eq('semester', profileData.semester);
+
+          if (subjectsError) throw subjectsError;
+          
+          const subjectIds = subjects?.map(s => s.id) || [];
+          let totalNotes = 0;
+          
+          if (subjectIds.length > 0) {
+            // Then count notes for these subjects
+            const { count, error: countError } = await supabase
+              .from('notes')
+              .select('*', { 
+                count: 'exact', 
+                head: true 
+              })
+              .in('subject_id', subjectIds)
+              .eq('is_verified', true);
+              
+            if (countError) throw countError;
+            totalNotes = count || 0;
+          }
+          
+          console.log('Total notes count:', totalNotes);
+          
+          // Update the stats state
+          setStats(prev => ({
+            ...prev,
+            totalNotes,
+          }));
+          
+        } catch (error) {
+          console.error('Error counting notes:', error);
+          setStats(prev => ({
+            ...prev,
+            totalNotes: 0,
+          }));
+        }
 
         const { count: eventsCount } = await supabase
           .from("events")
@@ -232,6 +335,70 @@ export default function Home() {
           .eq("semester", profileData.semester)
           .gte("exam_date", currentDate);
 
+        // Get count of notes for the current user's branch and semester
+        // First, get all subjects for the current branch and semester
+        // Define interface for the query result
+        interface SubjectBranch {
+          subjects: {
+            id: string;
+            semester: number;
+          };
+        }
+
+        const { data: subjectBranches } = await supabase
+          .from('subject_branches')
+          .select(`
+            subjects!inner(
+              id,
+              semester
+            )
+          `)
+          .eq('branch_id', profileData.branch_id)
+          .eq('subjects.semester', profileData.semester) as { data: SubjectBranch[] | null };
+          
+        console.log(`Found ${subjectBranches?.length || 0} subject mappings for branch ${profileData.branch_id} and semester ${profileData.semester}`, subjectBranches);
+        
+        const subjectIds = subjectBranches?.map(sb => sb.subjects.id).filter(Boolean) || [];
+        console.log('Subject IDs:', subjectIds);
+        
+        if (subjectIds.length === 0) {
+          console.log('No subjects found for branch and semester');
+          setStats({
+            totalNotes: 0,
+            upcomingEvents: eventsCount || 0,
+            upcomingExams: examsCount || 0,
+          });
+          return;
+        }
+        
+        // Get 2 most recent notes with subject information
+        const notesQuery = supabase
+          .from('notes')
+          .select(`
+            *,
+            subjects (
+              id,
+              name,
+              code
+            )
+          `, { count: 'exact' })
+          .in('subject_id', subjectIds)
+          .eq('is_verified', true)
+          .order('created_at', { ascending: false })
+          .limit(2); // Get only 2 most recent notes
+          
+        const { data: recentNotes, count: notesCount } = await notesQuery;
+        
+        console.log(`Found ${notesCount || 0} notes for ${subjectIds.length} subjects`);
+        
+        // Set recent notes for display
+        if (recentNotes) {
+          console.log('Recent notes:', recentNotes);
+          setRecentNotes(recentNotes);
+        } else {
+          setRecentNotes([]);
+        }
+
         setStats({
           totalNotes: notesCount || 0,
           upcomingEvents: eventsCount || 0,
@@ -244,6 +411,7 @@ export default function Home() {
       console.error("Error loading data:", error);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
@@ -251,7 +419,15 @@ export default function Home() {
     setRefreshing(true);
     await loadData();
     await refreshUnreadCount();
-    setRefreshing(false);
+    // Refreshing will be set to false in loadData's finally block
+  }
+
+  function getDaysUntil(dateString: string): number {
+    const date = new Date(dateString);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffTime = date.getTime() - today.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   }
 
   function extractGoogleDriveId(url: string): string | null {
@@ -266,66 +442,279 @@ export default function Home() {
     return null;
   }
 
-  async function downloadNote(note: Note) {
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      // Track the download if user is authenticated
-      if (user) {
-        try {
-          const trackingResult = await supabase.rpc("track_note_download", {
-            p_note_id: note.id,
-            p_user_id: user.id,
-            p_ip_address: null, // Will be handled by server
-            p_user_agent: "College Study Mobile App",
-            p_file_size: null,
-          });
-
-          if (trackingResult?.data?.success) {
-            console.log("Download tracked:", trackingResult.data.message);
-            if (trackingResult.data.already_downloaded) {
-              Alert.alert("Already Downloaded", "You've already downloaded this note today!");
-            }
-          }
-        } catch (trackError) {
-          // Don't block the download if tracking fails
-          console.log("Download tracking not available yet:", trackError);
-          // Fallback to old increment method
-          try {
-            await supabase.rpc("increment_download_count", { note_id: note.id });
-          } catch (fallbackError) {
-            console.log("Fallback tracking also failed:", fallbackError);
-          }
-        }
-      }
-
-      // Proceed with the download
-      const fileId = extractGoogleDriveId(note.file_url);
-      if (fileId) {
-        const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-        const supported = await Linking.canOpenURL(downloadUrl);
-        if (supported) {
-          await Linking.openURL(downloadUrl);
-        } else {
-          Alert.alert("Error", "Unable to open download link");
-        }
-      } else {
-        await Linking.openURL(note.file_url);
-      }
-    } catch (error) {
-      console.error("Error downloading note:", error);
-      Alert.alert("Error", "Failed to download note");
-    }
+  function getMimeType(extension: string): string {
+    const mimeTypes: { [key: string]: string } = {
+      'pdf': 'application/pdf',
+      'doc': 'application/msword',
+      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'xls': 'application/vnd.ms-excel',
+      'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'ppt': 'application/vnd.ms-powerpoint',
+      'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'png': 'image/png',
+      'txt': 'text/plain',
+    };
+    return mimeTypes[extension.toLowerCase()] || 'application/octet-stream';
   }
 
-  function getDaysUntil(dateString: string): number {
-    const date = new Date(dateString);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const diffTime = date.getTime() - today.getTime();
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  async function ensureDownloadsAccess(): Promise<string | null> {
+    if (Platform.OS !== 'android') return null;
+
+    const saf = FileSystem.StorageAccessFramework;
+    if (!saf) {
+      console.warn('StorageAccessFramework is unavailable on this platform');
+      return null;
+    }
+
+    if (downloadsDirectoryUri) return downloadsDirectoryUri;
+
+    try {
+      Alert.alert(
+        'Select Download Folder',
+        'Please choose the folder where notes should be saved (recommended: Downloads).'
+      );
+      const permissions = await saf.requestDirectoryPermissionsAsync();
+      if (!permissions.granted || !permissions.directoryUri) {
+        Alert.alert('Permission required', 'Unable to save the file without folder access.');
+        return null;
+      }
+      setDownloadsDirectoryUri(permissions.directoryUri);
+      return permissions.directoryUri;
+    } catch (error) {
+      console.error('Directory permission error', error);
+      Alert.alert('Permission error', 'Could not access the selected folder.');
+    }
+
+    return null;
+  }
+
+  function incrementLocalDownloadCount(noteId: string) {
+    setRecentNotes((prevNotes) =>
+      prevNotes.map((recentNote) =>
+        recentNote.id === noteId
+          ? {
+              ...recentNote,
+              download_count: (recentNote.download_count ?? 0) + 1,
+            }
+          : recentNote,
+      ),
+    );
+  }
+
+  async function downloadNote(note: Note) {
+    try {
+      setDownloading(note.id);
+      const fileId = extractGoogleDriveId(note.file_url);
+      if (!fileId) {
+        const supported = await Linking.canOpenURL(note.file_url);
+        if (supported) {
+          await Linking.openURL(note.file_url);
+        } else {
+          Alert.alert("Error", "Could not open the file. The link might be invalid.");
+        }
+        return;
+      }
+
+      // Get file extension from URL or use a default
+      let fileExtension = 'pdf';
+      try {
+        const url = new URL(note.file_url);
+        const pathParts = url.pathname.split('.');
+        if (pathParts.length > 1) {
+          fileExtension = pathParts.pop()?.toLowerCase() || 'pdf';
+        }
+      } catch (e) {
+        console.warn('Error parsing URL, using default extension', e);
+      }
+
+      const subjectPrefix = note.subjects?.code ? `${note.subjects.code.toLowerCase()}_` : '';
+      const cleanTitle = note.title
+        .replace(/[^\w\d\s-]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .toLowerCase();
+
+      const fileName = `${subjectPrefix}${cleanTitle}.${fileExtension}`.toLowerCase();
+      const tempFileUri = `${FileSystem.cacheDirectory}${fileName}`;
+
+      const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t&force=true`;
+
+      console.log('Starting download from:', downloadUrl);
+      console.log('Saving temp to:', tempFileUri);
+
+      try {
+        const existing = await FileSystem.getInfoAsync(tempFileUri);
+        if (existing.exists) {
+          await FileSystem.deleteAsync(tempFileUri, { idempotent: true });
+        }
+      } catch (cleanupError) {
+        console.warn('Unable to clear temp file before download', cleanupError);
+      }
+
+      const downloadResumable = FileSystem.createDownloadResumable(
+        downloadUrl,
+        tempFileUri,
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://drive.google.com/',
+          },
+        },
+        (progress) => {
+          const pct = progress.totalBytesExpectedToWrite
+            ? (progress.totalBytesWritten / progress.totalBytesExpectedToWrite) * 100
+            : 0;
+          console.log(`Download progress: ${pct}%`);
+        }
+      );
+
+      const result = await downloadResumable.downloadAsync();
+      if (!result || !result.uri) {
+        throw new Error('Download failed: No result returned');
+      }
+
+      const downloadedUri = result.uri;
+      const mimeType = getMimeType(fileExtension);
+      let savedContentUri: string | null = null;
+      let savedToDevice = false;
+      let savedLocationDescription = '';
+
+      if (Platform.OS === 'android' && FileSystem.StorageAccessFramework) {
+        const directoryUri = await ensureDownloadsAccess();
+        if (directoryUri) {
+          try {
+            const saf = FileSystem.StorageAccessFramework;
+            const base64 = await FileSystem.readAsStringAsync(downloadedUri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+
+            let destinationUri: string | null = null;
+            try {
+              destinationUri = await saf.createFileAsync(directoryUri, fileName, mimeType);
+            } catch (createError) {
+              console.warn('Primary file creation failed, generating fallback name', createError);
+              const nameWithoutExt = fileName.replace(new RegExp(`\\.${fileExtension}$`), '');
+              const fallbackName = `${nameWithoutExt}-${Date.now()}.${fileExtension}`;
+              destinationUri = await saf.createFileAsync(directoryUri, fallbackName, mimeType);
+            }
+
+            if (destinationUri) {
+              await FileSystem.writeAsStringAsync(destinationUri, base64, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              savedContentUri = destinationUri;
+              savedToDevice = true;
+              savedLocationDescription = 'your selected folder';
+            }
+          } catch (safError) {
+            console.error('Saving to selected folder failed', safError);
+            Alert.alert('Storage error', 'Could not save to the selected folder. We will attempt the default Downloads folder instead.');
+          }
+        }
+      }
+
+      if (!savedToDevice && Platform.OS === 'android') {
+        const permission = await MediaLibrary.requestPermissionsAsync();
+        if (permission.status === 'granted') {
+          try {
+            const asset = await MediaLibrary.createAssetAsync(downloadedUri);
+            const album = await MediaLibrary.getAlbumAsync('Download');
+            if (album) {
+              await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+            } else {
+              await MediaLibrary.createAlbumAsync('Download', asset, false);
+            }
+            savedContentUri = asset.uri ?? null;
+            savedToDevice = true;
+            savedLocationDescription = 'the Downloads folder';
+          } catch (mediaError) {
+            console.error('MediaLibrary save failed', mediaError);
+          }
+        }
+      }
+
+      if (savedToDevice) {
+        Alert.alert('Saved', `File saved to ${savedLocationDescription}.`);
+      } else {
+        Alert.alert('Success', 'File downloaded successfully!');
+      }
+
+      try {
+        if (Platform.OS === 'android') {
+          const uriToOpen = savedContentUri || await FileSystem.getContentUriAsync(downloadedUri);
+          await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+            data: uriToOpen,
+            flags: 1,
+            type: mimeType,
+          });
+        } else {
+          await Share.share({
+            url: `file://${downloadedUri}`,
+            title: `Open ${fileName}`,
+          });
+        }
+      } catch (openError) {
+        console.warn('Error opening file:', openError);
+        Alert.alert('Download Complete', savedToDevice ? 'Saved to your device.' : `File saved to: ${downloadedUri}`);
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      let incremented = false;
+
+      if (user) {
+        try {
+          await supabase.rpc('track_note_download', {
+            p_note_id: note.id,
+            p_user_id: user.id,
+            p_ip_address: null,
+            p_user_agent: 'College Study Mobile App',
+            p_file_size: null,
+          });
+          incremented = true;
+        } catch (trackError) {
+          console.warn('track_note_download failed, falling back to increment_download_count', trackError);
+        }
+      }
+
+      if (!incremented) {
+        try {
+          await supabase.rpc('increment_download_count', { note_id: note.id });
+          incremented = true;
+        } catch (incrementError) {
+          console.error('Failed to increment download count directly', incrementError);
+        }
+      }
+
+      if (incremented) {
+        incrementLocalDownloadCount(note.id);
+      }
+    } catch (error) {
+      console.error('Download failed:', error);
+      const fileId = extractGoogleDriveId(note.file_url);
+      if (fileId) {
+        const webViewUrl = `https://drive.google.com/file/d/${fileId}/view?usp=sharing`;
+        const supported = await Linking.canOpenURL(webViewUrl);
+        if (supported) {
+          await Linking.openURL(webViewUrl);
+        } else {
+          Alert.alert(
+            'Download Error',
+            error instanceof Error ? error.message : 'Could not download the file. Please try again later.',
+          );
+        }
+      } else {
+        Alert.alert(
+          'Error',
+          error instanceof Error ? error.message : 'Failed to download the file. Please try again.',
+        );
+      }
+    } finally {
+      setDownloading(null);
+    }
   }
 
   if (loading) {
@@ -338,7 +727,8 @@ export default function Home() {
   }
 
   return (
-    <View style={[{ flex: 1, backgroundColor: "#ffffff", paddingTop: insets.top }]}>
+    <ProfileRefreshContext.Provider value={{ refreshProfile, lastRefreshTime }}>
+      <View style={[{ flex: 1, backgroundColor: "#ffffff" }]}>
       <ScrollView
         style={styles.container}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#0066cc"]} />}
@@ -370,16 +760,16 @@ export default function Home() {
         {/* Stats Cards */}
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
-            <View style={styles.statIconContainer}>
+            <View style={[styles.statIconContainer, { backgroundColor: "#e6f7ff" }]}>
               <BookOpen color="#0066cc" size={24} />
             </View>
             <Text style={styles.statValue}>{stats.totalNotes}</Text>
-            <Text style={styles.statLabel}>Notes</Text>
+            <Text style={styles.statLabel}>Total Notes</Text>
           </View>
 
           <View style={styles.statCard}>
-            <View style={[styles.statIconContainer, { backgroundColor: "#e6f7ff" }]}>
-              <Calendar color="#0066cc" size={24} />
+            <View style={[styles.statIconContainer, { backgroundColor: "#f6ffed" }]}>
+              <Calendar color="#52c41a" size={24} />
             </View>
             <Text style={styles.statValue}>{stats.upcomingEvents}</Text>
             <Text style={styles.statLabel}>Events</Text>
@@ -480,33 +870,57 @@ export default function Home() {
         {/* Recent Notes */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Notes</Text>
-            <TouchableOpacity onPress={() => router.push("/(tabs)/notes")}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <BookOpen color="#0066cc" size={20} style={{ marginRight: 8 }} />
+              <Text style={styles.sectionTitle}>Recent Notes</Text>
+            </View>
+            <TouchableOpacity 
+              style={styles.seeAllButton}
+              onPress={() => router.push("/(tabs)/notes")}
+            >
               <Text style={styles.seeAllText}>View All</Text>
+              <ChevronRight size={16} color="#0066cc" />
             </TouchableOpacity>
           </View>
 
           {recentNotes.length === 0 ? (
             <View style={styles.emptyState}>
-              <BookOpen color="#ccc" size={48} />
-              <Text style={styles.emptyStateText}>No notes available yet</Text>
+              <BookOpen color="#e6f7ff" size={48} />
+              <Text style={styles.emptyStateText}>No recent notes</Text>
+              <Text style={[styles.emptyStateText, { fontSize: 14, color: '#999' }]}>
+                New notes will appear here
+              </Text>
             </View>
           ) : (
-            recentNotes.map((note) => (
-              <TouchableOpacity key={note.id} style={styles.noteCard} onPress={() => downloadNote(note)}>
-                <View style={styles.noteIcon}>
-                  <BookOpen color="#0066cc" size={20} />
-                </View>
-                <View style={styles.noteInfo}>
-                  <Text style={styles.noteTitle} numberOfLines={1}>
-                    {note.title}
-                  </Text>
-                  <Text style={styles.noteSubject}>{note.subjects?.name}</Text>
-                  <Text style={styles.noteDate}>{new Date(note.created_at).toLocaleDateString()}</Text>
-                </View>
-                <Download color="#0066cc" size={20} />
-              </TouchableOpacity>
-            ))
+            <View style={styles.notesGrid}>
+              {recentNotes.map((note) => (
+                <TouchableOpacity 
+                  key={note.id} 
+                  style={styles.noteCard} 
+                  onPress={() => downloadNote(note)}
+                >
+                  
+                  <View style={styles.noteInfo}>
+                    <Text style={styles.noteTitle} numberOfLines={1}>
+                      {note.title}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                      <Text style={styles.noteSubject} numberOfLines={1}>
+                        {note.subjects?.name} ({note.subjects?.code})
+                      </Text>
+                      <Text style={[styles.noteDate, { marginLeft: 8 }]}>
+                        • {new Date(note.created_at).toLocaleDateString()}
+                      </Text>
+                    </View>
+                  </View>
+                  {downloading === note.id ? (
+                    <ActivityIndicator size="small" color="#0066cc" />
+                  ) : (
+                    <Download color="#0066cc" size={20} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
         </View>
 
@@ -569,7 +983,12 @@ export default function Home() {
                 Track your academic performance with our smart CGPA calculator
               </Text>
             </View>
-            <CGPACalculator userId={profile.id} />
+            <CGPACalculator 
+              userId={profile.id} 
+              userSemester={profile.semester}
+              userYear={profile.year}
+              userBranchId={profile.branch_id}
+            />
           </View>
         )}
 
@@ -621,9 +1040,9 @@ export default function Home() {
         {/* Credits Section */}
         <View style={styles.creditsSection}>
           <Text style={styles.quote}>
-            "Education is the most powerful weapon which you can use to change the world."
+            “What is most important is to look ahead, to the future, to think of the next generation.”
           </Text>
-          <Text style={styles.quoteAuthor}>- Nelson Mandela</Text>
+          <Text style={styles.quoteAuthor}>- APJ Abdul Kalam</Text>
 
           <View style={styles.madeWithLove}>
             <Text style={styles.madeWithText}>Made with ❤️ for students</Text>
@@ -648,6 +1067,7 @@ export default function Home() {
         <View style={styles.bottomSpacing} />
       </ScrollView>
     </View>
+    </ProfileRefreshContext.Provider>
   );
 }
 
@@ -673,7 +1093,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 20,
     paddingVertical: 16,
-    paddingTop: 0,
+    paddingTop: 16,
     backgroundColor: "#fff",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
@@ -793,10 +1213,18 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  seeAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 4,
+  },
+  notesGrid: {
+    gap: 12,
   },
   sectionTitle: {
     fontSize: 18,

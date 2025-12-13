@@ -10,7 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
-import { Calculator, X, TrendingUp, BookOpen, Plus, Minus, Search } from "lucide-react-native";
+import { Calculator, X, RotateCcw, BookOpen, Plus, Minus, Search } from "lucide-react-native";
 import { supabase } from "../lib/supabase";
 
 interface Subject {
@@ -34,11 +34,59 @@ interface AvailableSubject {
   branch_name: string;
 }
 
-interface CGPACalculatorProps {
-  userId: string;
+type SubjectBranchRow = {
+  branches?: { name?: string } | { name?: string }[] | null;
+  subjects:
+    | SubjectData
+    | SubjectData[];
+};
+
+type SubjectData = {
+  id?: string;
+  name?: string;
+  code?: string;
+  credits?: number | null;
+  semester?: number | null;
+  is_core?: boolean | null;
+  is_active?: boolean | null;
+};
+
+interface UserProfile {
+  branch_id: string | null;
+  semester: number | null;
+  year: number | null;
+  branches?:
+    | {
+        name: string;
+        code: string;
+      }
+    | {
+        name: string;
+        code: string;
+      }[]
+    | null;
 }
 
-export const CGPACalculator: React.FC<CGPACalculatorProps> = ({ userId }) => {
+interface CGPACalculatorProps {
+  userId: string;
+  userSemester?: number | null;
+  userYear?: number | null;
+  userBranchId?: string | null;
+}
+
+export const CGPACalculator: React.FC<CGPACalculatorProps> = ({ 
+  userId, 
+  userSemester, 
+  userYear, 
+  userBranchId 
+}) => {
+  console.log('CGPA Calculator: Props updated', {
+    userId,
+    userSemester,
+    userYear,
+    userBranchId
+  });
+  
   const [modalVisible, setModalVisible] = useState(false);
   const [addSubjectModalVisible, setAddSubjectModalVisible] = useState(false);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -56,18 +104,85 @@ export const CGPACalculator: React.FC<CGPACalculatorProps> = ({ userId }) => {
     total_credits: 0,
     completed_credits: 0,
   });
+  const [isResetting, setIsResetting] = useState(false);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [lastKnownProfile, setLastKnownProfile] = useState<{ semester?: number | null; year?: number | null; branchId?: string | null }>({});
 
+  // Effect to detect profile changes and reset CGPA calculator
+  useEffect(() => {
+    const currentProfile = { semester: userSemester, year: userYear, branchId: userBranchId };
+    
+    // Check if semester or year has changed (branch change doesn't require clearing CGPA)
+    const hasChanged = 
+      lastKnownProfile.semester !== userSemester ||
+      lastKnownProfile.year !== userYear;
+    
+    // Also handle initial load
+    const isInitialLoad = Object.keys(lastKnownProfile).length === 0;
+    
+    if (isInitialLoad || hasChanged) {
+      console.log('CGPA Calculator: Semester/Year changed, clearing all selected subjects', {
+        currentProfile,
+        lastKnownProfile,
+        isInitialLoad,
+        hasChanged,
+        userSemester,
+        userYear,
+        userBranchId
+      });
+      
+      if (!isInitialLoad && hasChanged) {
+        // For actual changes, set resetting flag and clear database immediately
+        setIsResetting(true);
+        clearAllSubjectsFromDatabase();
+        
+        Alert.alert(
+          "CGPA Reset",
+          "Your CGPA calculator has been reset due to semester/year change. You can now add subjects for the new semester/year.",
+          [{ text: "OK" }]
+        );
+        
+        // Clear resetting flag after a short delay to allow database operations
+        setTimeout(() => {
+          setIsResetting(false);
+        }, 1000);
+      }
+      
+      // Clear local state immediately
+      setSubjects([]);
+      setAvailableSubjects([]);
+      setFilteredSubjects([]);
+      setSearchQuery("");
+      setSgpa(0);
+      setSummary({
+        subjects_count: 0,
+        completed_subjects: 0,
+        completion_percentage: 0,
+        total_credits: 0,
+        completed_credits: 0,
+      });
+      setProfile(null);
+      
+      // Update last known profile IMMEDIATELY to prevent repeated resets
+      setLastKnownProfile(currentProfile);
+    }
+  }, [userSemester, userYear, userBranchId]); // Only depend on profile changes
+
+  // Separate effect for loading subjects when modal opens (after reset is done)
   useEffect(() => {
     if (modalVisible) {
+      console.log('CGPA Calculator: Modal opened, loading subjects');
       loadSubjects();
     }
   }, [modalVisible]);
 
+  // Separate effect for loading available subjects when add modal opens
   useEffect(() => {
     if (addSubjectModalVisible && availableSubjects.length === 0) {
+      console.log('CGPA Calculator: Add subject modal opened, loading available subjects');
       loadAvailableSubjects();
     }
-  }, [addSubjectModalVisible]);
+  }, [addSubjectModalVisible, availableSubjects.length]);
 
   useEffect(() => {
     const filtered = availableSubjects.filter((subject) => {
@@ -81,24 +196,181 @@ export const CGPACalculator: React.FC<CGPACalculatorProps> = ({ userId }) => {
     setFilteredSubjects(filtered);
   }, [searchQuery, availableSubjects]);
 
+  // Add manual refresh function
+  const manualRefresh = async () => {
+    console.log('CGPA Calculator: Manual refresh triggered');
+    setIsResetting(true);
+    await clearAllSubjectsFromDatabase();
+    
+    // Clear local state
+    setSubjects([]);
+    setAvailableSubjects([]);
+    setFilteredSubjects([]);
+    setSearchQuery("");
+    setSgpa(0);
+    setSummary({
+      subjects_count: 0,
+      completed_subjects: 0,
+      completion_percentage: 0,
+      total_credits: 0,
+      completed_credits: 0,
+    });
+    setProfile(null);
+    
+    Alert.alert(
+      "CGPA Reset",
+      "CGPA calculator has been manually reset. All subjects have been cleared.",
+      [{ text: "OK" }]
+    );
+    
+    setTimeout(() => {
+      setIsResetting(false);
+    }, 1000);
+  };
+
+  const clearAllSubjectsFromDatabase = async () => {
+    try {
+      console.log('CGPA Calculator: Clearing all subjects from database for user', userId);
+      
+      // First, let's see what subjects exist
+      const { data: existingSubjects, error: checkError } = await supabase
+        .from('cgpa_records')
+        .select('*')
+        .eq('user_id', userId);
+        
+      if (checkError) {
+        console.error('Error checking existing subjects:', checkError);
+      } else {
+        console.log('CGPA Calculator: Found existing subjects to delete:', existingSubjects?.length || 0);
+      }
+      
+      // Now delete all subjects
+      const { error } = await supabase
+        .from('cgpa_records')
+        .delete()
+        .eq('user_id', userId);
+        
+      if (error) {
+        console.error('Error clearing subjects from database:', error);
+      } else {
+        console.log('CGPA Calculator: Successfully cleared all subjects from database');
+        
+        // Verify deletion
+        const { data: remainingSubjects, error: verifyError } = await supabase
+          .from('cgpa_records')
+          .select('*')
+          .eq('user_id', userId);
+          
+        if (verifyError) {
+          console.error('Error verifying deletion:', verifyError);
+        } else {
+          console.log('CGPA Calculator: Remaining subjects after deletion:', remainingSubjects?.length || 0);
+        }
+      }
+    } catch (error) {
+      console.error('Error in clearAllSubjectsFromDatabase:', error);
+    }
+  };
+
+  const fetchProfile = async (): Promise<UserProfile | null> => {
+    if (!userId) return null;
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("branch_id, semester, year, branches(name, code)")
+        .eq("id", userId)
+        .single();
+
+      if (error) {
+        console.error("Error loading profile:", error);
+        return profile;
+      }
+
+      if (data) {
+        const formatted: UserProfile = {
+          branch_id: data.branch_id ?? null,
+          semester: data.semester ?? null,
+          year: data.year ?? null,
+          branches: data.branches ?? null,
+        };
+        setProfile(formatted);
+        return formatted;
+      }
+    } catch (error) {
+      console.error("Error fetching profile:", error);
+    }
+    return profile;
+  };
+
   const loadSubjects = async () => {
+    // Prevent loading if we're in the middle of a reset
+    if (isResetting) {
+      console.log('CGPA Calculator: Skipping loadSubjects because reset is in progress');
+      return;
+    }
+    
     setLoading(true);
     try {
+      console.log('CGPA Calculator: Loading subjects for user', userId);
+      
+      await fetchProfile();
+
       // Get user's selected subjects with marks
-      const { data: subjectsData, error: subjectsError } = await supabase.rpc("get_user_selected_subjects", {
-        p_user_id: userId,
-      });
+      let subjectsData;
+      let subjectsError;
+      
+      try {
+        const result = await supabase.rpc("get_user_selected_subjects", {
+          p_user_id: userId,
+        });
+        subjectsData = result.data;
+        subjectsError = result.error;
+      } catch (rpcError) {
+        console.error('RPC function error:', rpcError);
+        // Fallback to direct query if RPC doesn't exist
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('cgpa_records')
+          .select(`
+            *,
+            subjects (
+              id,
+              name,
+              code,
+              credits,
+              is_core,
+              branches (name)
+            )
+          `)
+          .eq('user_id', userId);
+          
+        if (fallbackError) {
+          subjectsError = fallbackError;
+        } else {
+          subjectsData = fallbackData?.map(record => ({
+            subject_id: record.subjects.id,
+            subject_name: record.subjects.name,
+            subject_code: record.subjects.code,
+            credits: record.subjects.credits,
+            current_marks: record.current_marks,
+            current_grade_point: record.current_grade_point,
+            grade: record.grade,
+            is_core: record.subjects.is_core,
+            branch_name: record.subjects.branches?.name || 'Unknown'
+          }));
+        }
+      }
 
       if (subjectsError) {
         console.error("Error loading subjects:", subjectsError);
         if (subjectsError.message.includes("does not exist")) {
           Alert.alert("Setup Required", "Please run the database migration first to enable CGPA calculator.");
         } else {
-          Alert.alert("Error", "Failed to load subjects");
+          Alert.alert("Error", `Failed to load subjects: ${subjectsError.message}`);
         }
         return;
       }
 
+      console.log('CGPA Calculator: Loaded subjects', subjectsData);
       setSubjects(subjectsData || []);
 
       // Get CGPA summary
@@ -126,24 +398,82 @@ export const CGPACalculator: React.FC<CGPACalculatorProps> = ({ userId }) => {
 
   const loadAvailableSubjects = async () => {
     try {
-      const { data: availableData, error } = await supabase.rpc("get_available_subjects_for_cgpa", {
-        p_user_id: userId,
-      });
+      console.log('CGPA Calculator: Loading available subjects');
+      
+      const activeProfile = profile ?? (await fetchProfile());
 
-      if (error) {
-        console.error("Error loading available subjects:", error);
-        Alert.alert("Error", "Failed to load available subjects");
+      if (!activeProfile?.branch_id || !activeProfile.semester) {
+        console.log('CGPA Calculator: Profile incomplete', { branch_id: activeProfile?.branch_id, semester: activeProfile?.semester });
+        Alert.alert("Profile incomplete", "Please update your branch and semester to add subjects.");
+        setAvailableSubjects([]);
         return;
       }
 
-      // Filter out already selected subjects
+      console.log('CGPA Calculator: Fetching subjects for branch', activeProfile.branch_id, 'semester', activeProfile.semester);
+
+      const { data: subjectRows, error } = await supabase
+        .from("subject_branches")
+        .select(
+          `
+            branches ( name ),
+            subjects!inner (
+              id,
+              name,
+              code,
+              credits,
+              semester,
+              is_active
+            )
+          `,
+        )
+        .eq("branch_id", activeProfile.branch_id)
+        .eq("subjects.semester", activeProfile.semester)
+        .eq("subjects.is_active", true)
+        .order("name", { foreignTable: "subjects" });
+
+      if (error) {
+        console.error("Error loading available subjects:", error);
+        Alert.alert("Error", `Failed to load available subjects: ${error.message}`);
+        return;
+      }
+
+      const profileBranchName = Array.isArray(activeProfile.branches)
+        ? activeProfile.branches[0]?.name
+        : activeProfile.branches?.name;
+
+      const rows = (subjectRows ?? []) as SubjectBranchRow[];
+
+      const extracted: AvailableSubject[] = rows
+        .flatMap((row) => {
+          const branchNameSource = row.branches;
+          const branchNameFromRow = Array.isArray(branchNameSource)
+            ? branchNameSource[0]?.name
+            : branchNameSource?.name;
+          const subjectData = row.subjects;
+          const subjectsArray = (Array.isArray(subjectData) ? subjectData : [subjectData]) as SubjectData[];
+
+          return subjectsArray
+            .filter((subject): subject is SubjectData & { id: string; name: string; code: string } =>
+              Boolean(subject?.id && subject.name && subject.code),
+            )
+            .map((subject) => ({
+              subject_id: subject.id,
+              subject_name: subject.name,
+              subject_code: subject.code,
+              credits: subject.credits ?? 0,
+              is_core: subject.is_core ?? true,
+              branch_name: branchNameFromRow || profileBranchName || "Branch",
+            }));
+        })
+        .filter((subject, index, self) => index === self.findIndex((item) => item.subject_id === subject.subject_id));
+
       const selectedSubjectIds = subjects.map((s) => s.subject_id);
-      const filtered =
-        availableData?.filter((subject: AvailableSubject) => !selectedSubjectIds.includes(subject.subject_id)) || [];
+      const filtered = extracted.filter((subject) => !selectedSubjectIds.includes(subject.subject_id));
 
       setAvailableSubjects(filtered);
     } catch (error) {
       console.error("Error in loadAvailableSubjects:", error);
+      Alert.alert("Error", "Failed to load available subjects");
     }
   };
 
@@ -329,9 +659,14 @@ export const CGPACalculator: React.FC<CGPACalculatorProps> = ({ userId }) => {
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>CGPA Calculator</Text>
-            <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
-              <X color="#666" size={24} />
-            </TouchableOpacity>
+            <View style={styles.headerButtons}>
+              <TouchableOpacity style={styles.refreshButton} onPress={manualRefresh}>
+                <RotateCcw color="#0066cc" size={20} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
+                <X color="#666" size={24} />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {loading ? (
@@ -431,7 +766,7 @@ export const CGPACalculator: React.FC<CGPACalculatorProps> = ({ userId }) => {
                       <ActivityIndicator color="#fff" size="small" />
                     ) : (
                       <>
-                        <TrendingUp color="#fff" size={20} />
+                        <RotateCcw color="#fff" size={20} />
                         <Text style={styles.saveButtonText}>Save All Marks</Text>
                       </>
                     )}
@@ -617,6 +952,16 @@ const styles = StyleSheet.create({
   },
   closeButton: {
     padding: 8,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  refreshButton: {
+    padding: 8,
+    backgroundColor: '#f0f8ff',
+    borderRadius: 6,
   },
   loadingContainer: {
     flex: 1,

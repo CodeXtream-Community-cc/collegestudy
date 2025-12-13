@@ -12,12 +12,17 @@ import {
   StatusBar,
   Animated,
   Dimensions,
+  Linking,
 } from "react-native";
+import * as FileSystem from "expo-file-system";
 import { useRouter } from "expo-router";
 import { supabase } from "../../src/lib/supabase";
 import * as ImagePicker from "expo-image-picker";
 import { User, Camera, Check, ChevronDown, X, BookOpen, GraduationCap, Calendar, Hash, Zap } from "lucide-react-native";
 import Logo from "../../src/components/Logo";
+
+// Import profile refresh hook (we'll create a simple version for onboarding)
+const useProfileRefresh = () => ({ refreshProfile: async () => {} });
 
 const { width, height } = Dimensions.get("window");
 
@@ -101,29 +106,94 @@ export default function Onboarding() {
   }
 
   async function pickImage() {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
+    try {
+      // Request media library permissions first
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'Please grant permission to access your photo library to select a profile image.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        return;
+      }
 
-    if (!result.canceled && result.assets[0]) {
-      // Upload to Supabase storage
-      const file = result.assets[0];
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
 
-      if (user) {
-        const fileName = `${user.id}-${Date.now()}.jpg`;
-        const { data, error } = await supabase.storage.from("profiles").upload(fileName, file as any);
+      if (!result.canceled && result.assets && result.assets[0]) {
+        const file = result.assets[0];
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
 
-        if (data) {
-          const { data: urlData } = supabase.storage.from("profiles").getPublicUrl(fileName);
-          setFormData({ ...formData, photo_url: urlData.publicUrl });
+        if (user) {
+          try {
+            console.log('Starting image upload for user:', user.id);
+            console.log('Selected file:', file);
+            
+            // Create unique filename
+            const fileName = `${user.id}-${Date.now()}.jpg`;
+            console.log('Generated filename:', fileName);
+            
+            // Upload to Supabase storage
+            // Read file as base64 and convert to ArrayBuffer
+            console.log('Reading file as base64...');
+            const base64 = await FileSystem.readAsStringAsync(file.uri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            console.log('File read successfully, base64 length:', base64.length);
+            
+            // Convert base64 to ArrayBuffer
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            console.log('Converted to ArrayBuffer, bytes length:', bytes.length);
+            
+            console.log('Starting upload to Supabase...');
+            const { data, error } = await supabase.storage
+              .from("profiles")
+              .upload(fileName, bytes, {
+                contentType: 'image/jpeg',
+                upsert: true
+              });
+
+            if (error) {
+              console.error('Upload error:', error);
+              console.error('Error details:', JSON.stringify(error, null, 2));
+              throw new Error(`Upload failed: ${error.message}`);
+            }
+
+            console.log('Upload successful:', data);
+
+            // Get public URL
+            const { data: urlData } = await supabase.storage
+              .from("profiles")
+              .getPublicUrl(fileName);
+              
+            console.log('Upload successful, public URL:', urlData.publicUrl);
+            setFormData({ ...formData, photo_url: urlData.publicUrl });
+            console.log('Updated formData.photo_url to:', urlData.publicUrl);
+            
+          } catch (uploadError) {
+            console.error('Upload error:', uploadError);
+            Alert.alert('Error', 'Failed to upload profile photo. Please try again.');
+          }
         }
       }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to select image. Please try again.');
     }
   }
 
@@ -383,9 +453,6 @@ export default function Onboarding() {
       ]}
     >
       <View style={styles.stepHeader}>
-        <View style={styles.stepIconContainer}>
-          <User color="#0066cc" size={32} />
-        </View>
         <Text style={styles.stepTitle}>Personal Information</Text>
         <Text style={styles.stepSubtitle}>Let's start with your basic details</Text>
       </View>
@@ -425,9 +492,6 @@ export default function Onboarding() {
   const renderStep2 = () => (
     <Animated.View style={[styles.stepContent, { opacity: fadeAnimation }]}>
       <View style={styles.stepHeader}>
-        <View style={styles.stepIconContainer}>
-          <BookOpen color="#52c41a" size={32} />
-        </View>
         <Text style={styles.stepTitle}>Academic Details</Text>
         <Text style={styles.stepSubtitle}>Select your branch of study</Text>
       </View>
@@ -457,9 +521,6 @@ export default function Onboarding() {
   const renderStep3 = () => (
     <Animated.View style={[styles.stepContent, { opacity: fadeAnimation }]}>
       <View style={styles.stepHeader}>
-        <View style={styles.stepIconContainer}>
-          <Calendar color="#fa8c16" size={32} />
-        </View>
         <Text style={styles.stepTitle}>Academic Year</Text>
         <Text style={styles.stepSubtitle}>Choose your current year and semester</Text>
       </View>
@@ -577,9 +638,7 @@ export default function Onboarding() {
   const renderStep4 = () => (
     <Animated.View style={[styles.stepContent, { opacity: fadeAnimation }]}>
       <View style={styles.stepHeader}>
-        <View style={styles.stepIconContainer}>
-          <Hash color="#722ed1" size={32} />
-        </View>
+
         <Text style={styles.stepTitle}>Additional Details</Text>
         <Text style={styles.stepSubtitle}>Complete your profile</Text>
       </View>

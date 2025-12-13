@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { supabase } from "../../src/lib/supabase";
+import { useProfileRefresh } from "../(tabs)/home";
 import {
   User,
   Mail,
@@ -89,6 +90,7 @@ interface FormErrors {
 
 export default function EditProfile() {
   const router = useRouter();
+  const { refreshProfile } = useProfileRefresh();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -114,7 +116,7 @@ export default function EditProfile() {
   });
 
   const [errors, setErrors] = useState<FormErrors>({});
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoUri, setPhotoUri] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     loadData();
@@ -264,7 +266,9 @@ export default function EditProfile() {
 
     setSaving(true);
     try {
-      let photoUrl = profile?.photo_url;
+      let photoUrl: string | null | undefined = profile?.photo_url; // Start with existing photo URL
+      console.log("Initial photoUrl:", photoUrl);
+      console.log("photoUri state:", photoUri);
 
       // Handle photo upload if there's a new photo
       if (photoUri) {
@@ -339,8 +343,9 @@ export default function EditProfile() {
           return; // Stop the save process if upload fails
         }
       } else if (photoUri === null && profile?.photo_url) {
-        // Photo was removed
-        photoUrl = null;
+        // Photo was explicitly removed by user
+        photoUrl = null; // Use null to actually remove from database
+        console.log("Photo was removed by user, setting photo_url to null");
       }
 
       // Build update data with only core fields that definitely exist
@@ -354,9 +359,11 @@ export default function EditProfile() {
         updated_at: new Date().toISOString(),
       };
 
-      // Add photo URL if it's been updated
-      if (photoUrl !== undefined) {
+      // Handle photo URL updates
+      const originalPhotoUrl = profile?.photo_url;
+      if (photoUrl !== originalPhotoUrl) {
         updateData.photo_url = photoUrl;
+        console.log("Photo URL changed from", originalPhotoUrl, "to", photoUrl);
       }
 
       // Add optional fields only if they have values
@@ -392,6 +399,10 @@ export default function EditProfile() {
           throw error;
         }
       } else {
+        // Trigger profile refresh across the app
+        console.log('Profile updated successfully, triggering app-wide refresh');
+        await refreshProfile();
+        
         Alert.alert("Success", "Profile updated successfully!", [
           {
             text: "OK",
@@ -576,7 +587,6 @@ export default function EditProfile() {
           } else if (buttonIndex === 2 && (profile?.photo_url || photoUri)) {
             // Remove photo
             setPhotoUri(null);
-            Alert.alert("Photo Removed", "Profile photo will be removed when you save.");
           }
         },
       );
@@ -594,7 +604,6 @@ export default function EditProfile() {
                 style: "destructive",
                 onPress: () => {
                   setPhotoUri(null);
-                  Alert.alert("Photo Removed", "Profile photo will be removed when you save.");
                 },
               }
             : null,
@@ -731,6 +740,10 @@ export default function EditProfile() {
           <TouchableOpacity style={styles.photoContainer} onPress={handlePhotoSelection}>
             {photoUri ? (
               <Image source={{ uri: photoUri }} style={styles.profilePhoto} />
+            ) : photoUri === null ? (
+              <View style={styles.photoPlaceholder}>
+                <User color="#0066cc" size={48} />
+              </View>
             ) : profile?.photo_url ? (
               <Image source={{ uri: profile.photo_url }} style={styles.profilePhoto} />
             ) : (
@@ -743,17 +756,16 @@ export default function EditProfile() {
             </View>
           </TouchableOpacity>
           <Text style={styles.photoHint}>Tap to change profile photo</Text>
-          {(photoUri !== null || (profile?.photo_url && photoUri === null)) && (
+          {(photoUri !== null || profile?.photo_url) ? (
             <TouchableOpacity
               style={styles.removePhotoButton}
               onPress={() => {
                 setPhotoUri(null);
-                Alert.alert("Photo Removed", "Profile photo will be removed when you save.");
               }}
             >
               <Text style={styles.removePhotoText}>Remove Photo</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
 
         {/* Form Fields */}
@@ -763,7 +775,7 @@ export default function EditProfile() {
             <Text style={styles.label}>
               Full Name <Text style={styles.required}>*</Text>
             </Text>
-            <View style={[styles.inputContainer, errors.name && styles.inputError]}>
+            <View style={[styles.inputContainer, errors.name ? styles.inputError : undefined]}>
               <User color="#999" size={20} />
               <TextInput
                 style={styles.textInput}
@@ -780,71 +792,17 @@ export default function EditProfile() {
             {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
           </View>
 
-          {/* Email Field */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>
-              Email Address <Text style={styles.required}>*</Text>
-            </Text>
-            <View style={[styles.inputContainer, errors.email && styles.inputError]}>
-              <Mail color="#999" size={20} />
-              <TextInput
-                style={styles.textInput}
-                value={formData.email}
-                onChangeText={(text) => {
-                  setFormData({ ...formData, email: text });
-                  if (errors.email) setErrors({ ...errors, email: undefined });
-                }}
-                placeholder="Enter your email"
-                placeholderTextColor="#999"
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-            </View>
-            {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
-          </View>
-
-          {/* Phone Field */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Phone Number (Optional)</Text>
-            <View style={[styles.inputContainer, errors.phone && styles.inputError]}>
-              <Phone color="#999" size={20} />
-              <TextInput
-                style={styles.textInput}
-                value={formData.phone}
-                onChangeText={(text) => {
-                  setFormData({ ...formData, phone: text });
-                  if (errors.phone) setErrors({ ...errors, phone: undefined });
-                }}
-                placeholder="Enter your phone number (optional)"
-                placeholderTextColor="#999"
-                keyboardType="phone-pad"
-                maxLength={10}
-              />
-            </View>
-            {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
-            <Text style={styles.fieldHint}>Phone number is optional and can be added later</Text>
-          </View>
-
-          {/* Course Field (Hard-coded) */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Course</Text>
-            <View style={styles.disabledInput}>
-              <GraduationCap color="#999" size={20} />
-              <Text style={styles.disabledInputText}>B.Tech (Bachelor of Technology)</Text>
-            </View>
-          </View>
-
           {/* Branch Field */}
           <View style={styles.fieldGroup}>
             <Text style={styles.label}>
               Branch <Text style={styles.required}>*</Text>
             </Text>
             <TouchableOpacity
-              style={[styles.pickerContainer, errors.branch_id && styles.inputError]}
+              style={[styles.pickerContainer, errors.branch_id ? styles.inputError : undefined]}
               onPress={() => setShowBranchPicker(true)}
             >
               <BookOpen color="#999" size={20} />
-              <Text style={[styles.pickerText, !formData.branch_id && styles.pickerPlaceholder]}>
+              <Text style={[styles.pickerText, !formData.branch_id ? styles.pickerPlaceholder : undefined]}>
                 {getBranchName(formData.branch_id)}
               </Text>
               <ChevronDown color="#999" size={20} />
@@ -859,16 +817,17 @@ export default function EditProfile() {
                 Year <Text style={styles.required}>*</Text>
               </Text>
               <TouchableOpacity
-                style={[styles.pickerContainer, errors.year && styles.inputError]}
+                style={[styles.pickerContainer, errors.year ? styles.inputError : undefined]}
                 onPress={() => setShowYearPicker(true)}
               >
                 <Calendar color="#999" size={20} />
                 <Text style={[styles.pickerText, !formData.year && styles.pickerPlaceholder]}>
                   {formData.year ? `Year ${formData.year}` : "Select Year"}
                 </Text>
-                <ChevronDown color="#999" size={20} />
               </TouchableOpacity>
-              {errors.year && <Text style={styles.errorText}>{errors.year}</Text>}
+              {formData.year && (
+                <Text style={styles.semesterHint}> ({getSemesterLabel(parseInt(formData.year))})</Text>
+              )}
             </View>
 
             <View style={[styles.fieldGroup, styles.halfWidth]}>
@@ -879,7 +838,7 @@ export default function EditProfile() {
                 )}
               </Text>
               <TouchableOpacity
-                style={[styles.pickerContainer, errors.semester && styles.inputError]}
+                style={[styles.pickerContainer, errors.semester ? styles.inputError : undefined]}
                 onPress={() => setShowSemesterPicker(true)}
               >
                 <Calendar color="#999" size={20} />
@@ -895,7 +854,7 @@ export default function EditProfile() {
           {/* Roll Number Field */}
           <View style={styles.fieldGroup}>
             <Text style={styles.label}>Roll Number</Text>
-            <View style={styles.inputContainer}>
+            <View style={[styles.inputContainer, errors.roll_number ? styles.inputError : undefined]}>
               <Text style={styles.rollIcon}>#</Text>
               <TextInput
                 style={styles.textInput}
@@ -1052,7 +1011,7 @@ export default function EditProfile() {
                       <Text
                         style={[styles.pickerItemText, !semesterOption.can_select && styles.pickerItemTextDisabled]}
                       >
-                        {semesterOption.semester_label}
+                        Semester {semesterOption.semester_number}
                       </Text>
                       {!semesterOption.can_select && (
                         <Text style={styles.pickerItemStatus}>{semesterOption.status_reason}</Text>

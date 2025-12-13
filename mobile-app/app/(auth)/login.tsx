@@ -47,10 +47,38 @@ export default function Login() {
     }).start();
   }, []);
 
-  // Email validation
+  // Email validation with allowed domains
   useEffect(() => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    setEmailValid(emailRegex.test(email.trim()));
+    const isValidFormat = emailRegex.test(email.trim());
+    
+    if (isValidFormat) {
+      const allowedDomains = [
+        'gmail.com',
+        'outlook.com', 
+        'hotmail.com',
+        'live.com',
+        'yahoo.com',
+        'yahoo.co.in',
+        'edu.in',
+        'ac.in',
+        'zohomail.in',
+        'zohomail.com',
+        'proton.me',
+        'protonmail.com',
+        'outlook.in',
+        'icloud.com',
+        'rediffmail.com',
+        'cc.cc',
+        'hbtu.ac.in',
+      ];
+      
+      const domain = email.trim().split('@')[1].toLowerCase();
+      const isAllowedDomain = allowedDomains.includes(domain);
+      setEmailValid(isAllowedDomain);
+    } else {
+      setEmailValid(false);
+    }
   }, [email]);
 
   // Timer for resend
@@ -71,7 +99,35 @@ export default function Login() {
     }
 
     if (!emailValid) {
-      Alert.alert("Error", "Please enter a valid email address");
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const isValidFormat = emailRegex.test(email.trim());
+      
+      if (!isValidFormat) {
+        Alert.alert("Error", "Please enter a valid email address");
+      } else {
+        const allowedDomains = [
+          'gmail.com', 'outlook.com', 'hotmail.com', 'live.com',
+          'yahoo.com', 'yahoo.co.in', 'edu.in', 'ac.in',
+          'zohomail.in', 'zohomail.com', 'proton.me', 'protonmail.com',
+          'outlook.in', 'icloud.com', 'rediffmail.com'
+        ];
+        
+        Alert.alert(
+          "Email Domain Not Allowed",
+          "For security and credibility, we only allow emails from:\n\n" +
+          "• Gmail (gmail.com)\n" +
+          "• Outlook (outlook.com, outlook.in)\n" +
+          "• Hotmail (hotmail.com)\n" +
+          "• Live (live.com)\n" +
+          "• Yahoo (yahoo.com, yahoo.co.in)\n" +
+          "• Educational (.edu.in, .ac.in)\n" +
+          "• Zoho Mail (zohomail.in, zohomail.com)\n" +
+          "• Proton (proton.me, protonmail.com)\n" +
+          "• iCloud (icloud.com)\n" +
+          "• Rediffmail (rediffmail.com)\n\n" +
+          "Please use an email from one of these providers."
+        );
+      }
       return;
     }
 
@@ -305,7 +361,7 @@ export default function Login() {
               )}
             </View>
 
-            <Text style={styles.title}>{otpSent ? "Verify Your Email" : "Welcome Back"}</Text>
+            <Text style={styles.title}>{otpSent ? "Verify Your Email" : "Welcome"}</Text>
             <Text style={styles.subtitle}>
               {otpSent
                 ? `Enter the 6-digit code sent to\n${email}`
@@ -318,8 +374,12 @@ export default function Login() {
             <Animated.View style={[styles.inputSection, { transform: [{ scale: scaleAnimation }] }]}>
               <View style={styles.inputContainer}>
                 <Text style={styles.inputLabel}>Email Address</Text>
-                <View style={[styles.emailInputWrapper, emailValid && styles.emailInputValid]}>
-                  <Mail color={emailValid ? "#52c41a" : "#999"} size={20} />
+                <View style={[
+                  styles.emailInputWrapper, 
+                  emailValid && styles.emailInputValid,
+                  !emailValid && email.trim() && email.includes('@') && email.includes('.') ? styles.emailInputInvalid : null
+                ]}>
+                  <Mail color={emailValid ? "#52c41a" : (!emailValid && email.trim() && email.includes('@') && email.includes('.') ? "#ff4d4f" : "#999")} size={20} />
                   <TextInput
                     style={styles.emailInput}
                     placeholder="your.email@hbtu.ac.in"
@@ -337,6 +397,11 @@ export default function Login() {
                     </View>
                   )}
                 </View>
+                {!emailValid && email.trim() && email.includes('@') && email.includes('.') && (
+                  <Text style={styles.errorMessage}>
+                    For your security, please use a trusted email provider
+                  </Text>
+                )}
               </View>
 
               <TouchableOpacity
@@ -521,6 +586,10 @@ const styles = StyleSheet.create({
     borderColor: "#52c41a",
     backgroundColor: "#f6ffed",
   },
+  emailInputInvalid: {
+    borderColor: "#ff4d4f",
+    backgroundColor: "#fff2f0",
+  },
   emailInput: {
     flex: 1,
     fontSize: 16,
@@ -531,6 +600,12 @@ const styles = StyleSheet.create({
   validIcon: {
     position: "absolute",
     right: 16,
+  },
+  errorMessage: {
+    fontSize: 12,
+    color: "#ff4d4f",
+    marginTop: 8,
+    marginLeft: 4,
   },
   otpContainer: {
     flexDirection: "row",
